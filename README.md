@@ -59,7 +59,7 @@ This project is a **Model Context Protocol (MCP) server** designed to enable LLM
 1. **Clone the repository**
    ```bash
    git clone https://github.com/Nishaant-Soni/MCP_Server_for_Financial_Analysis.git
-   cd MCP_Server_for_Financial_Analysis/mcp-server-trader
+   cd MCP_Server_for_Financial_Analysis
    ```
 2. **Install dependencies** (requires [uv](https://github.com/astral-sh/uv))
    ```bash
@@ -77,7 +77,7 @@ This project is a **Model Context Protocol (MCP) server** designed to enable LLM
           "command": "uv",
           "args": [
             "--directory",
-            "/path/to/mcp-server-trader",
+            "/path/to/MCP_Server_for_Financial_Analysis",
             "run",
             "main.py"
           ]
