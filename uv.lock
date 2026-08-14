@@ -801,7 +801,7 @@ wheels = [
 ]
 
 [[package]]
-name = "trade"
+name = "tearsheet"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [

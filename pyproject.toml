@@ -1,7 +1,7 @@
 [project]
-name = "trade"
+name = "tearsheet"
 version = "0.1.0"
-description = "Add your description here"
+description = "An MCP server that lets LLMs retrieve, analyze, and visualize stock price and financial statement data."
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [

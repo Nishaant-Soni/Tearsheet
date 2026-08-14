@@ -1,7 +1,7 @@
-# MCP Server for Financial Analysis
+# Tearsheet
 
 ## Introduction
-This project is a **Model Context Protocol (MCP) server** designed to enable LLMs (such as Claude, Cursor, or GPT-based agents) to retrieve, analyze, and visualize stock prices and financial report data. It provides a set of robust tools for quantitative trading research, investment analysis, and financial education.
+Tearsheet is a **Model Context Protocol (MCP) server** designed to enable LLMs (such as Claude, Cursor, or GPT-based agents) to retrieve, analyze, and visualize stock prices and financial report data. It provides a set of robust tools for quantitative trading research, investment analysis, and financial education.
 
 ## Usage Scenarios
 - **LLM-driven trading analysis**: Let LLMs fetch and analyze stock data, financial statements, and technical indicators to generate trading insights.
@@ -58,8 +58,8 @@ This project is a **Model Context Protocol (MCP) server** designed to enable LLM
 ## Installation
 1. **Clone the repository**
    ```bash
-   git clone https://github.com/Nishaant-Soni/MCP_Server_for_Financial_Analysis.git
-   cd MCP_Server_for_Financial_Analysis
+   git clone https://github.com/Nishaant-Soni/Tearsheet.git
+   cd Tearsheet
    ```
 2. **Install dependencies** (requires [uv](https://github.com/astral-sh/uv))
    ```bash
@@ -73,11 +73,11 @@ This project is a **Model Context Protocol (MCP) server** designed to enable LLM
     ```json
     {
       "mcpServers": {
-        "trader-mcp": {
+        "tearsheet": {
           "command": "uv",
           "args": [
             "--directory",
-            "/path/to/MCP_Server_for_Financial_Analysis",
+            "/path/to/Tearsheet",
             "run",
             "main.py"
           ]
@@ -85,7 +85,7 @@ This project is a **Model Context Protocol (MCP) server** designed to enable LLM
       }
     }
     ```
-    `trader-mcp` should now be listed in your Claude tools.
+    `tearsheet` should now be listed in your Claude tools.
 
 2. **Start talking with your trading assistant!**
 
