@@ -108,6 +108,19 @@ async def test_fundamental(acme, chart_dir, no_subprocess):
         {"period_end": "2024-06-30", "value": 300.0},
         {"period_end": "2025-06-30", "value": 400.0},
     ]
+    assert "(annual, USD)" in out["summary"]
+
+
+@pytest.mark.anyio
+async def test_fundamental_ratio_units_in_summary(acme, chart_dir, no_subprocess):
+    r = await call(
+        "tearsheet_plot_fundamental", {"ticker": "ACME", "metric": "debt_to_equity"}
+    )
+    assert "(annual, times)" in assert_chart(r, chart_dir)["summary"]
+    r = await call(
+        "tearsheet_plot_fundamental", {"ticker": "ACME", "metric": "net_margin"}
+    )
+    assert "(annual, fraction, 0.25 = 25%)" in assert_chart(r, chart_dir)["summary"]
 
 
 @pytest.mark.anyio

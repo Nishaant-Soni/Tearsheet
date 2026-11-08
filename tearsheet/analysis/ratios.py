@@ -162,6 +162,28 @@ METRIC_FIELDS: dict[str, tuple[str, ...]] = {
 }
 
 MARKET_METRICS = ("pe_ratio", "pb_ratio", "dividend_yield")
+
+# How each metric's value reads: percent (fraction shown as %), multiple (x times),
+# amount (reporting currency) or per_share (currency per share).
+METRIC_UNITS: dict[str, str] = {
+    "gross_margin": "percent",
+    "operating_margin": "percent",
+    "net_margin": "percent",
+    "fcf_margin": "percent",
+    "operating_cash_flow_margin": "percent",
+    "roe": "percent",
+    "roa": "percent",
+    "dividend_yield": "percent",
+    "debt_to_equity": "multiple",
+    "liabilities_to_equity": "multiple",
+    "current_ratio": "multiple",
+    "quick_ratio": "multiple",
+    "pe_ratio": "multiple",
+    "pb_ratio": "multiple",
+    "ebitda": "amount",
+    "free_cash_flow": "amount",
+    "book_value_per_share": "per_share",
+}
 ALL_METRICS = tuple(STATEMENT_METRICS) + MARKET_METRICS
 
 

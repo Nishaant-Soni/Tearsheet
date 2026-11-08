@@ -15,7 +15,7 @@ import mplfinance as mpf  # noqa: E402
 import pandas as pd  # noqa: E402
 from matplotlib.backends.backend_agg import FigureCanvasAgg  # noqa: E402
 from matplotlib.figure import Figure  # noqa: E402
-from matplotlib.ticker import PercentFormatter  # noqa: E402
+from matplotlib.ticker import FuncFormatter, PercentFormatter  # noqa: E402
 
 from tearsheet.analysis.backtest import crossover_signals  # noqa: E402
 
@@ -87,12 +87,88 @@ def comparison_chart(
     return _to_png(fig)
 
 
-def fundamental_chart(
-    points: list[tuple[str, float | None]], ticker: str, metric: str, is_ratio: bool
-) -> bytes:
-    """Bar chart of one metric per fiscal period, oldest first."""
+SCALES = ((1e12, "T"), (1e9, "B"), (1e6, "M"), (1e3, "K"))
+SCALE_WORDS = {
+    "T": "trillions",
+    "B": "billions",
+    "M": "millions",
+    "K": "thousands",
+    "": "",
+}
+
+
+def amount_scale(values: list[float]) -> tuple[float, str]:
+    """Divisor and suffix (T, B, M, K or none) that suit the largest magnitude."""
+    biggest = max((abs(v) for v in values), default=0.0)
+    for divisor, suffix in SCALES:
+        if biggest >= divisor:
+            return divisor, suffix
+    return 1.0, ""
+
+
+def _trim(x: float, decimals: int) -> str:
+    text = f"{x:,.{decimals}f}"
+    return text.rstrip("0").rstrip(".") if "." in text else text
+
+
+def format_money(
+    value: float,
+    currency: str | None,
+    divisor: float = 1.0,
+    suffix: str = "",
+    decimals: int = 1,
+    trim: bool = False,
+) -> str:
+    """$59.5B for USD, 59.5B TWD for other currencies, 59.5B when unknown.
+
+    trim drops trailing zeros (axis ticks: $60B rather than $60.0B).
+    """
+    sign = "-" if value < 0 else ""
+    scaled = abs(value) / divisor
+    number = _trim(scaled, decimals) if trim else f"{scaled:,.{decimals}f}"
+    amount = f"{number}{suffix}"
+    if currency == "USD":
+        return f"{sign}${amount}"
+    return f"{sign}{amount} {currency}" if currency else f"{sign}{amount}"
+
+
+def format_metric(
+    value: float | None,
+    unit: str,
+    currency: str | None,
+    divisor: float = 1.0,
+    suffix: str = "",
+) -> str:
+    if value is None:
+        return "n/a"
+    if unit == "percent":
+        return f"{value:.1%}"
+    if unit == "multiple":
+        return f"{value:.2f}x"
+    if unit == "per_share":
+        return format_money(value, currency, decimals=2)
+    return format_money(value, currency, divisor, suffix)
+
+
+def fundamental_figure(
+    points: list[tuple[str, float | None]],
+    ticker: str,
+    metric: str,
+    unit: str,
+    currency: str | None = None,
+) -> Figure:
+    """Bar chart of one metric per fiscal period, oldest first.
+
+    unit is percent, multiple, amount or per_share (see analysis.ratios.METRIC_UNITS).
+    Amounts are scaled to T/B/M/K on both the bar labels and the y axis.
+    """
     labels = [end for end, _ in points]
     values = [v if v is not None else 0.0 for _, v in points]
+    divisor, suffix = (
+        amount_scale([v for _, v in points if v is not None])
+        if unit == "amount"
+        else (1.0, "")
+    )
     fig = _new_figure()
     ax = fig.add_subplot()
     positions = list(range(len(labels)))
@@ -102,20 +178,54 @@ def fundamental_chart(
         color=["#4C72B0" if v is not None else "#CCCCCC" for _, v in points],
     )
     for bar, (_, v) in zip(bars, points):
-        text = "n/a" if v is None else (f"{v:.1%}" if is_ratio else f"{v:,.3g}")
+        negative = v is not None and v < 0
         ax.annotate(
-            text,
+            format_metric(v, unit, currency, divisor, suffix),
             (bar.get_x() + bar.get_width() / 2, bar.get_height()),
             ha="center",
-            va="bottom",
+            va="top" if negative else "bottom",
         )
+    if any(v < 0 for v in values):
+        ax.axhline(0, color="black", linewidth=0.8)
+
+    if unit == "percent":
+        ax.yaxis.set_major_formatter(PercentFormatter(1.0))
+    elif unit == "multiple":
+        ax.yaxis.set_major_formatter(FuncFormatter(lambda y, _: f"{_trim(y, 2)}x"))
+    else:
+        decimals = 2 if unit == "per_share" else 1
+        ax.yaxis.set_major_formatter(
+            FuncFormatter(
+                lambda y, _: format_money(
+                    y, currency, divisor, suffix, decimals, trim=True
+                )
+            )
+        )
+    name = metric.replace("_", " ")
+    if unit == "amount":
+        scale = SCALE_WORDS[suffix]
+        ax.set_ylabel(
+            f"{name} ({currency or 'reporting currency'}{', ' + scale if scale else ''})"
+        )
+    elif unit == "per_share":
+        ax.set_ylabel(f"{name} ({currency or 'reporting currency'} per share)")
+    else:
+        ax.set_ylabel(name)
     ax.set_xticks(positions, labels)
-    ax.set_title(f"{ticker} {metric.replace('_', ' ')}")
+    ax.set_title(f"{ticker} {name}")
     ax.set_xlabel("Period end")
     ax.grid(True, axis="y", alpha=0.3)
-    if is_ratio:
-        ax.yaxis.set_major_formatter(PercentFormatter(1.0))
-    return _to_png(fig)
+    return fig
+
+
+def fundamental_chart(
+    points: list[tuple[str, float | None]],
+    ticker: str,
+    metric: str,
+    unit: str,
+    currency: str | None = None,
+) -> bytes:
+    return _to_png(fundamental_figure(points, ticker, metric, unit, currency))
 
 
 def ma_crossover_chart(

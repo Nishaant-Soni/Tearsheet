@@ -97,6 +97,11 @@ name), `fcf_margin`. `tearsheet_get_fundamentals` computes all 17 metrics by def
   pyplot global state, and runs in a worker thread. Candlesticks use `mplfinance.plot`
   on server-created axes (the deprecated `original_flavor` module is gone).
   `tearsheet_plot_comparison` normalizes to 100 by default.
+- **Fundamental charts label values by unit:** margins and returns as percentages,
+  leverage and liquidity ratios as multiples (`1.34x`), EBITDA and free cash flow
+  scaled to the reporting currency (`$59.5B`, `1.7T TWD`) on both bars and axis, book
+  value per share as currency (`$7.71`). Units come from `METRIC_UNITS` in
+  `tearsheet/analysis/ratios.py`.
 - **Server renamed** from `tearsheet` to `tearsheet_mcp` and given `instructions`:
   prefer ticker-based tools over passing data between tools, ratios are fractions,
   dates are inclusive, summaries are the default.

@@ -10,7 +10,7 @@ from mcp.types import CallToolResult, TextContent
 
 from server import PLOT_LOCAL_WRITE, mcp
 from tearsheet.analysis.backtest import crossover_signals
-from tearsheet.analysis.ratios import CURRENCY_METRICS
+from tearsheet.analysis.ratios import CURRENCY_METRICS, METRIC_UNITS
 from tearsheet.data import market
 from tearsheet.models import (
     ChartResult,
@@ -196,17 +196,23 @@ async def plot_fundamental(
             f"Yahoo does not report the inputs for {metric} for '{ticker}'. "
             + " ".join(data.table.notes)
         )
-    is_ratio = metric not in CURRENCY_METRICS and metric != "book_value_per_share"
+    unit = METRIC_UNITS[metric]
     png, path = await _render_and_save(
-        partial(charts.fundamental_chart, points, ticker, metric, is_ratio),
+        partial(charts.fundamental_chart, points, ticker, metric, unit, data.currency),
         f"fundamental_{metric}",
         [ticker],
         points[0][0],
         points[-1][0],
     )
     listed = ", ".join(f"{end}: {v}" for end, v in points)
-    unit = "fraction" if is_ratio else (data.currency or "reporting currency")
-    text = f"{ticker} {metric} ({period}, {unit}): {listed}. Saved to {path}."
+    currency = data.currency or "reporting currency"
+    unit_text = {
+        "percent": "fraction, 0.25 = 25%",
+        "multiple": "times",
+        "amount": currency,
+        "per_share": f"{currency} per share",
+    }[unit]
+    text = f"{ticker} {metric} ({period}, {unit_text}): {listed}. Saved to {path}."
     return _respond(
         png,
         ChartResult(
