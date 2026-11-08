@@ -93,6 +93,12 @@ name), `fcf_margin`. `tearsheet_get_fundamentals` computes all 17 metrics by def
   pyplot global state, and runs in a worker thread. Candlesticks use `mplfinance.plot`
   on server-created axes (the deprecated `original_flavor` module is gone).
   `tearsheet_plot_comparison` normalizes to 100 by default.
+- **Server renamed** from `tearsheet` to `tearsheet_mcp` and given `instructions`:
+  prefer ticker-based tools over passing data between tools, ratios are fractions,
+  dates are inclusive, summaries are the default.
+- **Every tool** has a `tearsheet_` name, typed inputs with enums for fixed choices,
+  tool annotations, an output schema, and a docstring (under 25 lines) covering when
+  to use it versus related tools, units, outputs and an example call.
 - All yfinance calls run in worker threads. Price histories and dividend/split series
   are cached in-process: 15 minutes for intraday or ranges ending today, 4 hours
   otherwise.

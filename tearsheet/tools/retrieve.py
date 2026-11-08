@@ -55,6 +55,8 @@ async def get_price_history(
 ) -> PriceHistoryResult:
     """Get OHLCV price history for 1 to 10 tickers over a date range.
 
+    For the latest price use tearsheet_get_quote; for indicators, backtests or
+    charts call those tools directly with the ticker (no need to fetch rows first).
     end_date is inclusive. Intraday limits: '1m' spans at most 7 days within the
     last 30; '5m'/'15m'/'30m' only the last 60 days; '1h' the last 730 days.
     adjusted=true (default) adjusts for splits and dividends; adjusted=false is
@@ -126,6 +128,7 @@ async def get_dividends(
 ) -> DividendsResult:
     """Get cash dividends per share by ex-date for one ticker.
 
+    For dividend yield use tearsheet_get_fundamentals (metric dividend_yield).
     start_date (optional, YYYY-MM-DD) drops earlier dividends. Amounts are per
     share in the quote currency, adjusted for later splits. Non-payers return an
     empty list, not an error.
@@ -149,6 +152,7 @@ async def get_dividends(
 async def get_splits(ticker: Ticker) -> SplitsResult:
     """Get the full stock split history for one ticker.
 
+    Prices from tearsheet_get_price_history are already split-adjusted.
     Each value is the split ratio as new shares per old share: 10.0 is a 10-for-1
     split, 0.1 is a 1-for-10 reverse split. Tickers that never split return an
     empty list, not an error.

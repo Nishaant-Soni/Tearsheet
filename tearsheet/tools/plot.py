@@ -82,6 +82,7 @@ async def plot_price_chart(
 ) -> ChartOutput:
     """Plot daily prices for one ticker as a line (closes) or candlestick chart.
 
+    For the numbers without a chart use tearsheet_get_price_history.
     Data is fetched on the server (adjusted daily bars). Candlesticks include a
     volume panel. The PNG is saved under TEARSHEET_DATA_DIR with a server-chosen
     name and returned as an image, with a text summary (file path, date range,
@@ -128,6 +129,7 @@ async def plot_comparison(
 ) -> ChartOutput:
     """Plot daily closes for 2 to 8 tickers on one chart.
 
+    For period returns without a chart use tearsheet_get_price_history.
     normalized=true (default) rebases each series to 100 at its first close in the
     range, so tickers at different price levels compare directly; false plots raw
     closes. Saves the PNG under TEARSHEET_DATA_DIR and returns it with a text

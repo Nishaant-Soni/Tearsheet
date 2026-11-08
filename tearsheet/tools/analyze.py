@@ -59,6 +59,8 @@ async def calculate_indicator(
 ) -> IndicatorResult:
     """Compute a technical indicator for one ticker over a date range.
 
+    For strategy returns use tearsheet_backtest_ma_crossover; for raw prices
+    tearsheet_get_price_history.
     Prices are fetched on the server (adjusted closes); computed from bars in the
     range only, so the first values are warm-up nulls. Outputs: sma, ema (price);
     rsi (0-100, Wilder; 100 if no losses); macd -> macd, signal, histogram (uses
@@ -169,6 +171,7 @@ async def backtest_ma_crossover(
 ) -> BacktestResult:
     """Backtest a long-only SMA crossover strategy on daily bars for one ticker.
 
+    To see the signals on a chart use tearsheet_plot_ma_crossover.
     Buy when the short SMA closes above the long SMA after being at or below it;
     sell on the reverse. Assumptions: signal at bar t's close, fill at bar t+1's
     open (a last-bar signal is not filled); fully invested or flat; cost_bps on
