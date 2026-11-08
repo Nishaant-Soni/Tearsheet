@@ -138,6 +138,15 @@ class FakeTicker:
 
 
 @pytest.fixture(autouse=True)
+def chart_dir(monkeypatch, tmp_path):
+    """Charts go to a temp dir, and the image viewer stays off, in every test."""
+    path = tmp_path / "charts"
+    monkeypatch.setenv("TEARSHEET_DATA_DIR", str(path))
+    monkeypatch.delenv("TEARSHEET_OPEN_CHARTS", raising=False)
+    return path
+
+
+@pytest.fixture(autouse=True)
 def fake_yahoo(monkeypatch) -> Iterator[FakeYahoo]:
     """Replace yfinance for every test and start each test with empty caches."""
     yahoo = FakeYahoo()

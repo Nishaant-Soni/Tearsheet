@@ -16,10 +16,10 @@ EXPECTED_TOOLS = {
     "tearsheet_calculate_growth_rates",
     "tearsheet_calculate_indicator",
     "tearsheet_backtest_ma_crossover",
-    "mcp_plot_price_chart",
-    "mcp_plot_financial_metric",
-    "mcp_plot_comparison_chart",
-    "mcp_plot_trading_opportunities",
+    "tearsheet_plot_price_chart",
+    "tearsheet_plot_fundamental",
+    "tearsheet_plot_comparison",
+    "tearsheet_plot_ma_crossover",
 }
 
 

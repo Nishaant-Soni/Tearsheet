@@ -17,6 +17,10 @@ and deviations from the spec.
 | `mcp_calculate_technical_indicators` | `tearsheet_calculate_indicator` | Phase 3 |
 | `mcp_calculate_growth_rates` | `tearsheet_calculate_growth_rates` | Phase 3 |
 | `mcp_backtest_strategy` | `tearsheet_backtest_ma_crossover` | Phase 3 |
+| `mcp_plot_price_chart` | `tearsheet_plot_price_chart` | Phase 4 |
+| `mcp_plot_comparison_chart` | `tearsheet_plot_comparison` | Phase 4 |
+| `mcp_plot_financial_metric` | `tearsheet_plot_fundamental` | Phase 4 |
+| `mcp_plot_trading_opportunities` | `tearsheet_plot_ma_crossover` | Phase 4 |
 
 ## Renamed metrics
 
@@ -76,6 +80,19 @@ name), `fcf_margin`. `tearsheet_get_fundamentals` computes all 17 metrics by def
   mean/std of per-trade returns). Adds `cagr`, `annualized_volatility`, `exposure`,
   `avg_trade_return`. `outperformance` renamed to `excess_return`. Zero trades is no
   longer an error.
+- **Plot tools take `ticker` + dates** (or `ticker` + `metric` + `period` for
+  fundamentals) and fetch data on the server. The `filename` parameter is gone: the
+  server names files `{tool}_{TICKERS}_{start}_{end}_{yyyymmddHHMMSS}.png` with
+  tickers reduced to `[A-Z0-9-]`, checks the resolved path is inside the data
+  directory (it accepted `../../x.png`), and never overwrites an earlier chart.
+- **Charts no longer open the system image viewer.** Set `TEARSHEET_OPEN_CHARTS=1` to
+  opt in. Charts are saved under `TEARSHEET_DATA_DIR` (default: the repo's `data/`).
+- **Plot results** carry the PNG, a text summary (file path, date range, last close,
+  period return or signal dates or plotted values) and structured content.
+- **Rendering** uses matplotlib's object API (`Figure` + Agg canvas) instead of
+  pyplot global state, and runs in a worker thread. Candlesticks use `mplfinance.plot`
+  on server-created axes (the deprecated `original_flavor` module is gone).
+  `tearsheet_plot_comparison` normalizes to 100 by default.
 - All yfinance calls run in worker threads. Price histories and dividend/split series
   are cached in-process: 15 minutes for intraday or ranges ending today, 4 hours
   otherwise.
@@ -132,5 +149,17 @@ name), `fcf_margin`. `tearsheet_get_fundamentals` computes all 17 metrics by def
 - **RSI is 50 when the price does not move at all** (both average gain and loss are
   0); the spec only defines the zero-loss case.
 - **Period growth divides by |prev|**, as before, so -50 to -25 is +0.5.
+- **Default data dir is the repo's `data/` folder**, not `./data` relative to the
+  working directory, so charts land in the same place however the server is launched
+  (Claude Desktop may start it with a different cwd).
+- **Plot tools return `CallToolResult`** (image + text) annotated with a `ChartResult`
+  model, so they still publish an `outputSchema` and `structuredContent`.
+- **`tearsheet_plot_fundamental` plots statement metrics only.** `pe_ratio`,
+  `pb_ratio` and `dividend_yield` exist only for the latest period, so they are not in
+  its `metric` enum.
+- **Added `tearsheet/viz/storage.py`** (file naming, path checks, opt-in viewer) and
+  `tearsheet/tools/common.py` (the fundamentals fetch-and-compute step shared by
+  `tearsheet_get_fundamentals` and `tearsheet_plot_fundamental`), neither in the
+  spec's layout. `viz/charts.py` stays pure.
 - **`tearsheet/serialize.py` added** (not in the spec's layout) for NaN/inf to `None`,
   rounding, summaries and row downsampling, shared by all tool wrappers.

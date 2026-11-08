@@ -1,95 +1,283 @@
+from collections.abc import Callable
+from functools import partial
+from typing import Annotated
+
+import anyio
+import pandas as pd
 from mcp.server.mcpserver import Image
+from mcp.server.mcpserver.exceptions import ToolError
+from mcp.types import CallToolResult, TextContent
 
-from server import mcp
-from tearsheet.viz.charts import (
-    plot_comparison_chart,
-    plot_financial_metric,
-    plot_price_chart,
-    plot_trading_opportunities,
+from server import PLOT_LOCAL_WRITE, mcp
+from tearsheet.analysis.backtest import crossover_signals
+from tearsheet.analysis.ratios import CURRENCY_METRICS
+from tearsheet.data import market
+from tearsheet.models import (
+    ChartResult,
+    ChartType,
+    ComparisonTickers,
+    EndDate,
+    LongWindow,
+    Period,
+    PeriodValue,
+    PlotMetric,
+    ShortWindow,
+    StartDate,
+    Ticker,
+    Title,
+    resolve_range,
 )
+from tearsheet.serialize import RATIO_DP, fmt_date, num, summarize
+from tearsheet.tools.common import load_fundamentals
+from tearsheet.viz import charts, storage
+
+ChartOutput = Annotated[CallToolResult, ChartResult]
 
 
-@mcp.tool()
-def mcp_plot_price_chart(
-    prices: list,
-    chart_type: str = "line",
-    title: str = "Price Chart",
-    filename: str | None = None,
-) -> Image:
-    """
-    Generates a price chart (line or candlestick) from OHLCV data.
-    Args:
-        prices: List of dicts with keys 'date', 'open', 'high', 'low', 'close', 'volume'.
-        chart_type: 'line' or 'candlestick'.
-        title: Chart title.
-        filename: Optional filename to save the plot.
-    Returns:
-        An Image object (PNG) of the chart. The image is also saved to the data/ directory.
-    """
-    return plot_price_chart(prices, chart_type, title, filename)
+async def _render_and_save(
+    render: Callable[[], bytes],
+    tool: str,
+    tickers: list[str],
+    start: str | None,
+    end: str | None,
+) -> tuple[bytes, str]:
+    """Render in a worker thread, save under the data dir, optionally open."""
+
+    def work() -> tuple[bytes, str]:
+        png = render()
+        path = storage.save_chart(png, tool, tickers, start, end)
+        storage.maybe_open(path)
+        return png, str(path)
+
+    try:
+        return await anyio.to_thread.run_sync(work)
+    except OSError as exc:
+        raise ToolError(
+            f"Could not save the chart ({type(exc).__name__}). Set TEARSHEET_DATA_DIR "
+            "to a writable folder."
+        ) from None
 
 
-@mcp.tool()
-def mcp_plot_financial_metric(
-    dates: list,
-    values: list,
-    metric_name: str = "Metric",
-    title: str = "Financial Metric",
-    filename: str | None = None,
-) -> Image:
-    """
-    Plots a financial metric over time.
-    Args:
-        dates: List of date strings.
-        values: List of metric values.
-        metric_name: Name of the metric.
-        title: Chart title.
-        filename: Optional filename to save the plot.
-    Returns:
-        An Image object (PNG) of the chart. The image is also saved to the data/ directory.
-    """
-    return plot_financial_metric(dates, values, metric_name, title, filename)
+def _respond(png: bytes, result: ChartResult) -> CallToolResult:
+    return CallToolResult(
+        content=[
+            Image(data=png, format="png").to_image_content(),
+            TextContent(type="text", text=result.summary),
+        ],
+        structured_content=result.model_dump(mode="json"),
+    )
 
 
-@mcp.tool()
-def mcp_plot_comparison_chart(
-    dates: list,
-    series: dict,
-    title: str = "Comparison Chart",
-    filename: str | None = None,
-    normalized: bool = False,
-) -> Image:
-    """
-    Plots a comparison chart for multiple tickers or financial metrics over time.
-    Args:
-        dates: List of date strings.
-        series: Dict where keys are labels and values are lists of values for each date.
-        title: Chart title.
-        filename: Optional filename to save the plot.
-        normalized: Set to true to rebase all series to 100 at the start date, making
-                    tickers with very different price levels (e.g. NVDA vs AMD) directly
-                    comparable. The Y-axis will read "Indexed Value (base = 100)".
-    Returns:
-        An Image object (PNG) of the chart. The image is also saved to the data/ directory.
-    """
-    return plot_comparison_chart(dates, series, title, filename, normalized)
+def _pct(x: float | None) -> str:
+    return "n/a" if x is None else f"{x:+.1%}"
 
 
-@mcp.tool()
-def mcp_plot_trading_opportunities(
-    prices: list,
-    short_window: int = 9,
-    long_window: int = 21,
-    title: str = "Trading Opportunities",
-) -> Image:
+@mcp.tool(name="tearsheet_plot_price_chart", annotations=PLOT_LOCAL_WRITE)
+async def plot_price_chart(
+    ticker: Ticker,
+    start_date: StartDate,
+    end_date: EndDate = None,
+    chart_type: ChartType = "line",
+    title: Title = None,
+) -> ChartOutput:
+    """Plot daily prices for one ticker as a line (closes) or candlestick chart.
+
+    Data is fetched on the server (adjusted daily bars). Candlesticks include a
+    volume panel. The PNG is saved under TEARSHEET_DATA_DIR with a server-chosen
+    name and returned as an image, with a text summary (file path, date range,
+    last close, period return) you can quote without reading the image.
+
+    Example: {"ticker": "AAPL", "start_date": "2024-01-01", "chart_type": "candlestick"}
     """
-    Plots price data with trading signals/opportunities.
-    Args:
-        prices: List of dicts with keys 'date', 'open', 'high', 'low', 'close', 'volume'.
-        short_window: Short window for the short moving average. Default is 9.
-        long_window: Long window for the long moving average. Default is 21.
-        title: Chart title.
-    Returns:
-        An Image object (PNG) of the chart. The image is also saved to the data/ directory.
+    rng = resolve_range(start_date, end_date, "1d")
+    df = await market.get_history(ticker, rng.start, rng.end, "1d")
+    s = summarize(df)
+    png, path = await _render_and_save(
+        partial(charts.price_chart, df, ticker, chart_type, title),
+        "price_chart",
+        [ticker],
+        s.first_date,
+        s.last_date,
+    )
+    text = (
+        f"{chart_type.capitalize()} chart of {ticker}, {s.first_date} to {s.last_date} "
+        f"({s.rows} bars). Last close {s.last_close}, period return "
+        f"{_pct(s.period_return)}. Saved to {path}."
+    )
+    return _respond(
+        png,
+        ChartResult(
+            chart="price_chart",
+            file_path=path,
+            tickers=[ticker],
+            start_date=s.first_date,
+            end_date=s.last_date,
+            summary=text,
+            price_summaries={ticker: s},
+        ),
+    )
+
+
+@mcp.tool(name="tearsheet_plot_comparison", annotations=PLOT_LOCAL_WRITE)
+async def plot_comparison(
+    tickers: ComparisonTickers,
+    start_date: StartDate,
+    end_date: EndDate = None,
+    normalized: bool = True,
+    title: Title = None,
+) -> ChartOutput:
+    """Plot daily closes for 2 to 8 tickers on one chart.
+
+    normalized=true (default) rebases each series to 100 at its first close in the
+    range, so tickers at different price levels compare directly; false plots raw
+    closes. Saves the PNG under TEARSHEET_DATA_DIR and returns it with a text
+    summary of each ticker's period return.
+
+    Example: {"tickers": ["NVDA", "AMD", "INTC"], "start_date": "2024-01-01"}
     """
-    return plot_trading_opportunities(prices, short_window, long_window, title)
+    rng = resolve_range(start_date, end_date, "1d")
+    unique = list(dict.fromkeys(tickers))
+    frames = await market.gather(
+        *(partial(market.get_history, t, rng.start, rng.end, "1d") for t in unique)
+    )
+    closes = pd.concat(
+        {t: df["close"] for t, df in zip(unique, frames)}, axis=1
+    ).sort_index()
+    summaries = {t: summarize(df) for t, df in zip(unique, frames)}
+    start, end = fmt_date(closes.index[0]), fmt_date(closes.index[-1])
+    png, path = await _render_and_save(
+        partial(charts.comparison_chart, closes, normalized, title),
+        "comparison",
+        unique,
+        start,
+        end,
+    )
+    returns = ", ".join(f"{t} {_pct(s.period_return)}" for t, s in summaries.items())
+    text = (
+        f"{'Normalized (base 100)' if normalized else 'Raw close'} comparison, {start} to "
+        f"{end}. Period returns: {returns}. Saved to {path}."
+    )
+    return _respond(
+        png,
+        ChartResult(
+            chart="comparison",
+            file_path=path,
+            tickers=unique,
+            start_date=start,
+            end_date=end,
+            summary=text,
+            price_summaries=summaries,
+        ),
+    )
+
+
+@mcp.tool(name="tearsheet_plot_fundamental", annotations=PLOT_LOCAL_WRITE)
+async def plot_fundamental(
+    ticker: Ticker, metric: PlotMetric, period: Period = "annual"
+) -> ChartOutput:
+    """Plot one financial metric across fiscal periods as a bar chart.
+
+    Uses the same definitions as tearsheet_get_fundamentals (ratios as fractions,
+    shown as percentages; ebitda and free_cash_flow in the reporting currency).
+    Price-based ratios (pe_ratio, pb_ratio, dividend_yield) exist only for the
+    latest period and cannot be plotted. Returns the image plus the plotted values.
+
+    Example: {"ticker": "MSFT", "metric": "free_cash_flow", "period": "annual"}
+    """
+    data = await load_fundamentals(ticker, period, [metric])
+    dp = 0 if metric in CURRENCY_METRICS else RATIO_DP
+    points = [
+        (end, num(values[metric], dp)) for end, values in reversed(data.table.periods)
+    ]
+    if all(v is None for _, v in points):
+        raise ToolError(
+            f"Yahoo does not report the inputs for {metric} for '{ticker}'. "
+            + " ".join(data.table.notes)
+        )
+    is_ratio = metric not in CURRENCY_METRICS and metric != "book_value_per_share"
+    png, path = await _render_and_save(
+        partial(charts.fundamental_chart, points, ticker, metric, is_ratio),
+        f"fundamental_{metric}",
+        [ticker],
+        points[0][0],
+        points[-1][0],
+    )
+    listed = ", ".join(f"{end}: {v}" for end, v in points)
+    unit = "fraction" if is_ratio else (data.currency or "reporting currency")
+    text = f"{ticker} {metric} ({period}, {unit}): {listed}. Saved to {path}."
+    return _respond(
+        png,
+        ChartResult(
+            chart="fundamental",
+            file_path=path,
+            tickers=[ticker],
+            start_date=points[0][0],
+            end_date=points[-1][0],
+            summary=text,
+            metric_values=[PeriodValue(period_end=e, value=v) for e, v in points],
+        ),
+    )
+
+
+@mcp.tool(name="tearsheet_plot_ma_crossover", annotations=PLOT_LOCAL_WRITE)
+async def plot_ma_crossover(
+    ticker: Ticker,
+    start_date: StartDate,
+    end_date: EndDate = None,
+    short_window: ShortWindow = 9,
+    long_window: LongWindow = 21,
+    title: Title = None,
+) -> ChartOutput:
+    """Plot closes with short/long SMAs and mark crossover buy/sell signals.
+
+    Signals match tearsheet_backtest_ma_crossover: a buy marker where the short
+    SMA closes above the long SMA after being at or below it, a sell marker on the
+    reverse, drawn at the signal bar's close. Use the backtest tool for returns.
+    The text summary lists the signal dates.
+
+    Example: {"ticker": "TSLA", "start_date": "2024-01-01", "short_window": 20,
+              "long_window": 50}
+    """
+    if long_window <= short_window:
+        raise ToolError(
+            f"long_window ({long_window}) must be greater than short_window ({short_window})."
+        )
+    rng = resolve_range(start_date, end_date, "1d")
+    df = await market.get_history(ticker, rng.start, rng.end, "1d")
+    if len(df) <= long_window:
+        raise ToolError(
+            f"Only {len(df)} daily bars in range; need more than long_window={long_window}. "
+            "Use an earlier start_date or a shorter long_window."
+        )
+    sig = crossover_signals(df["close"], short_window, long_window)["signal"]
+    buys = [fmt_date(d) for d in df.index[sig == 1]]
+    sells = [fmt_date(d) for d in df.index[sig == -1]]
+    s = summarize(df)
+    png, path = await _render_and_save(
+        partial(
+            charts.ma_crossover_chart, df, ticker, short_window, long_window, title
+        ),
+        "ma_crossover",
+        [ticker],
+        s.first_date,
+        s.last_date,
+    )
+    text = (
+        f"{ticker} SMA {short_window}/{long_window}, {s.first_date} to {s.last_date}. "
+        f"{len(buys)} buy signals ({', '.join(buys) or 'none'}), {len(sells)} sell "
+        f"signals ({', '.join(sells) or 'none'}). Last close {s.last_close}. Saved to {path}."
+    )
+    return _respond(
+        png,
+        ChartResult(
+            chart="ma_crossover",
+            file_path=path,
+            tickers=[ticker],
+            start_date=s.first_date,
+            end_date=s.last_date,
+            summary=text,
+            price_summaries={ticker: s},
+            buy_signal_dates=buys,
+            sell_signal_dates=sells,
+        ),
+    )

@@ -13,3 +13,8 @@ READ_ONLY_REMOTE = ToolAnnotations(
 PURE_COMPUTE = ToolAnnotations(
     readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False
 )
+
+# Plot tools write a new PNG to local disk on every call.
+PLOT_LOCAL_WRITE = ToolAnnotations(
+    readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=True
+)

@@ -1,5 +1,3 @@
-from datetime import date, timedelta
-from functools import partial
 from typing import Annotated
 
 from mcp.server.mcpserver.exceptions import ToolError
@@ -10,17 +8,10 @@ from tearsheet.analysis import backtest, growth, indicators
 from tearsheet.analysis.ratios import (
     ALL_METRICS,
     CURRENCY_METRICS,
-    MARKET_METRICS,
-    METRIC_FIELDS,
-    MarketInputs,
-    compute_fundamentals,
-    ttm_eps,
 )
-from tearsheet.data import fundamentals, market
-from tearsheet.data.fundamentals import FIELD_STATEMENT, LABELS
+from tearsheet.data import market
 from tearsheet.models import (
     INTRADAY_INTERVALS,
-    AsOfPrice,
     BacktestResult,
     BacktestTrade,
     CostBps,
@@ -48,6 +39,7 @@ from tearsheet.models import (
     resolve_range,
 )
 from tearsheet.serialize import RATIO_DP, frame_rows, num, series_summary
+from tearsheet.tools.common import load_fundamentals
 
 
 @mcp.tool(name="tearsheet_calculate_indicator", annotations=READ_ONLY_REMOTE)
@@ -280,52 +272,10 @@ async def get_fundamentals(
 
     Example: {"ticker": "AAPL", "metrics": ["gross_margin", "debt_to_equity"]}
     """
-    wanted = list(dict.fromkeys(metrics or ALL_METRICS))
-    statements = sorted(
-        {FIELD_STATEMENT[f] for m in wanted for f in METRIC_FIELDS[m]},
-        key=list(LABELS).index,
+    data = await load_fundamentals(
+        ticker, period, list(dict.fromkeys(metrics or ALL_METRICS))
     )
-    market_wanted = [m for m in wanted if m in MARKET_METRICS]
-
-    periods, currency = [], None
-    if statements:
-        (periods, notes), currency = await market.gather(
-            partial(fundamentals.get_merged_fields, ticker, period, statements),
-            partial(fundamentals.get_financial_currency, ticker),
-        )
-    else:
-        notes = []
-
-    as_of, inputs = None, None
-    if market_wanted:
-        quote, dividends = await market.gather(
-            partial(market.get_quote, ticker),
-            partial(market.get_dividends, ticker, date.today() - timedelta(days=365)),
-        )
-        eps, eps_note = ttm_eps(periods, period)
-        mismatch = None
-        if currency and quote.currency and currency != quote.currency:
-            mismatch = (
-                f"pe_ratio and pb_ratio: statements are in {currency} but the price "
-                f"is in {quote.currency}, so they are not computed."
-            )
-        inputs = MarketInputs(
-            price=quote.last_price,
-            eps=eps,
-            eps_note=eps_note,
-            ttm_dividends=sum(d.value for d in dividends),
-            currency_mismatch=mismatch,
-        )
-        if not periods:
-            periods = [(date.today().isoformat(), {})]
-        as_of = AsOfPrice(
-            price=quote.last_price,
-            currency=quote.currency,
-            fetched_at=quote.fetched_at,
-            applies_to_period_end=periods[0][0],
-        )
-
-    table = compute_fundamentals(periods, wanted, inputs)
+    table = data.table
     rows = [
         FundamentalsPeriod(
             period_end=end,
@@ -340,14 +290,14 @@ async def get_fundamentals(
     kept = {r.period_end for r in rows}
     return FundamentalsResult(
         ticker=ticker,
-        currency=currency,
+        currency=data.currency,
         period=period,
-        as_of_price=as_of,
+        as_of_price=data.as_of,
         periods=rows,
         inputs_used={
             end: {k: num(v) for k, v in used.items()}
             for end, used in table.inputs_used.items()
             if end in kept
         },
-        notes=[*notes, *table.notes],
+        notes=[*data.notes, *table.notes],
     )

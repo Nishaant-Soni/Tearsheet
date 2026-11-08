@@ -381,3 +381,52 @@ class BacktestResult(BaseModel):
     buy_signal_dates: list[str]
     sell_signal_dates: list[str]
     notes: list[str]
+
+
+# ------------------------------------------------------------------ charts
+
+ChartType = Literal["line", "candlestick"]
+PlotMetric = Literal[
+    "gross_margin",
+    "operating_margin",
+    "net_margin",
+    "ebitda",
+    "debt_to_equity",
+    "liabilities_to_equity",
+    "current_ratio",
+    "quick_ratio",
+    "free_cash_flow",
+    "fcf_margin",
+    "operating_cash_flow_margin",
+    "roe",
+    "roa",
+    "book_value_per_share",
+]
+Title = Annotated[
+    str | None,
+    Field(max_length=120, description="Chart title. Defaults to a generated one."),
+]
+ComparisonTickers = Annotated[
+    list[Ticker],
+    Field(min_length=2, max_length=8, description="2 to 8 ticker symbols."),
+]
+
+
+class PeriodValue(BaseModel):
+    period_end: str
+    value: float | None
+
+
+class ChartResult(BaseModel):
+    chart: str
+    file_path: str = Field(description="Where the PNG was saved on the server.")
+    tickers: list[str]
+    start_date: str | None
+    end_date: str | None
+    summary: str = Field(description="The same text summary sent alongside the image.")
+    price_summaries: dict[str, HistorySummary] | None = None
+    buy_signal_dates: list[str] | None = None
+    sell_signal_dates: list[str] | None = None
+    metric_values: list[PeriodValue] | None = Field(
+        default=None, description="Plotted values, oldest first."
+    )

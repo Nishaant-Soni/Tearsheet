@@ -1,197 +1,160 @@
-import os
-import platform
-import subprocess
+"""Chart rendering as pure functions: DataFrames in, PNG bytes out.
+
+Uses matplotlib's object API (Figure + Agg canvas) and never pyplot's global state,
+because tools render in worker threads. Nothing here touches the filesystem or
+the network; see viz/storage.py for saving.
+"""
+
 from io import BytesIO
 
 import matplotlib
 
-# mcp 2.x runs sync tools in worker threads; GUI backends crash off the main thread.
-matplotlib.use("Agg")
+matplotlib.use("Agg")  # mplfinance imports pyplot; keep it off GUI backends
 
-import matplotlib.dates as mdates  # noqa: E402
-import matplotlib.pyplot as plt  # noqa: E402
-import pandas as pd
-from mcp.server.mcpserver import Image
+import mplfinance as mpf  # noqa: E402
+import pandas as pd  # noqa: E402
+from matplotlib.backends.backend_agg import FigureCanvasAgg  # noqa: E402
+from matplotlib.figure import Figure  # noqa: E402
+from matplotlib.ticker import PercentFormatter  # noqa: E402
 
-from tearsheet.analysis.backtest import crossover_signals
+from tearsheet.analysis.backtest import crossover_signals  # noqa: E402
 
-_DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "data")
-os.makedirs(_DATA_DIR, exist_ok=True)
-
-
-def _open_file(filepath: str) -> None:
-    """Open a file with the system's default application."""
-    system = platform.system()
-    if system == "Darwin":
-        subprocess.Popen(["open", filepath])
-    elif system == "Linux":
-        subprocess.Popen(["xdg-open", filepath])
-    elif system == "Windows":
-        os.startfile(filepath)
+FIGSIZE = (10, 5)
+DPI = 100
 
 
-def _save_and_return(buf: BytesIO, filename: str) -> Image:
-    img_bytes = buf.read()
-    filepath = os.path.join(_DATA_DIR, filename)
-    with open(filepath, "wb") as f:
-        f.write(img_bytes)
-    _open_file(filepath)
-    return Image(data=img_bytes, format="png")
+def _new_figure() -> Figure:
+    fig = Figure(figsize=FIGSIZE, dpi=DPI)
+    FigureCanvasAgg(fig)
+    return fig
 
 
-def plot_price_chart(
-    prices: list,
-    chart_type: str = "line",
-    title: str = "Price Chart",
-    filename: str | None = None,
-) -> Image:
-    from matplotlib.ticker import MaxNLocator
+def _to_png(fig: Figure) -> bytes:
+    buf = BytesIO()
+    fig.savefig(buf, format="png", bbox_inches="tight")
+    return buf.getvalue()
 
-    df = pd.DataFrame(prices)
-    df["date"] = pd.to_datetime(df["date"])
-    fig, ax = plt.subplots(figsize=(10, 5))
-    if chart_type == "line":
-        ax.plot(df["date"], df["close"], label="Close Price")
-        ax.set_ylabel("Close Price")
-    elif chart_type == "candlestick":
-        try:
-            from mplfinance.original_flavor import candlestick_ohlc
-        except ImportError:
-            raise ImportError("mplfinance is required for candlestick charts")
-        df_ohlc = df[["date", "open", "high", "low", "close"]].copy()
-        df_ohlc["date"] = mdates.date2num(df_ohlc["date"])
-        candlestick_ohlc(ax, df_ohlc.values, width=0.6, colorup="g", colordown="r")
-        ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m-%d"))
+
+def price_chart(
+    df: pd.DataFrame, ticker: str, chart_type: str, title: str | None
+) -> bytes:
+    """Line chart of closes, or OHLC candlesticks with a volume panel."""
+    fig = _new_figure()
+    title = (
+        title or f"{ticker} {'candlestick' if chart_type == 'candlestick' else 'close'}"
+    )
+    if chart_type == "candlestick":
+        ax = fig.add_axes((0.08, 0.30, 0.88, 0.62))
+        vax = fig.add_axes((0.08, 0.08, 0.88, 0.18), sharex=ax)
+        ohlc = df.rename(columns=str.capitalize)[
+            ["Open", "High", "Low", "Close", "Volume"]
+        ]
+        mpf.plot(ohlc, type="candle", style="yahoo", ax=ax, volume=vax)
         ax.set_ylabel("Price")
+        ax.tick_params(labelbottom=False)
     else:
-        raise ValueError(f"Unknown chart_type: {chart_type}")
+        ax = fig.add_subplot()
+        ax.plot(df.index, df["close"], label="Close")
+        ax.set_ylabel("Close")
+        ax.grid(True, alpha=0.3)
+        fig.autofmt_xdate()
     ax.set_title(title)
-    ax.xaxis.set_major_locator(MaxNLocator(integer=True))
-    ax.grid(True)
-    fig.autofmt_xdate()
-    buf = BytesIO()
-    plt.savefig(buf, format="png", bbox_inches="tight")
-    plt.close(fig)
-    buf.seek(0)
-    return _save_and_return(buf, filename or f"price_chart_{chart_type}.png")
+    return _to_png(fig)
 
 
-def plot_financial_metric(
-    dates: list,
-    values: list,
-    metric_name: str = "Metric",
-    title: str = "Financial Metric",
-    filename: str | None = None,
-) -> Image:
-    fig, ax = plt.subplots(figsize=(10, 5))
-    parsed_dates = pd.to_datetime(dates)
-    ax.plot(parsed_dates, values, marker="o", label=metric_name)
-    ax.set_title(title)
-    ax.set_xlabel("Date")
-    ax.set_ylabel(metric_name)
+def normalize_to_100(closes: pd.DataFrame) -> pd.DataFrame:
+    """Rebase each column to 100 at its first non-null value."""
+    return closes.apply(
+        lambda s: s / s.dropna().iloc[0] * 100 if s.notna().any() else s
+    )
+
+
+def comparison_chart(
+    closes: pd.DataFrame, normalized: bool, title: str | None
+) -> bytes:
+    """One line per column (ticker), aligned on dates."""
+    data = normalize_to_100(closes) if normalized else closes
+    fig = _new_figure()
+    ax = fig.add_subplot()
+    for col in data.columns:
+        series = data[col].dropna()
+        ax.plot(series.index, series.to_numpy(), label=col)
+    ax.set_title(title or " vs ".join(data.columns))
+    ax.set_ylabel("Indexed value (base = 100)" if normalized else "Close")
     ax.legend()
-    ax.grid(True)
+    ax.grid(True, alpha=0.3)
     fig.autofmt_xdate()
-    buf = BytesIO()
-    plt.savefig(buf, format="png", bbox_inches="tight")
-    plt.close(fig)
-    buf.seek(0)
-    return _save_and_return(buf, filename or f"financial_metric_{metric_name}.png")
+    return _to_png(fig)
 
 
-def plot_comparison_chart(
-    dates: list,
-    series: dict,
-    title: str = "Comparison Chart",
-    filename: str | None = None,
-    normalized: bool = False,
-) -> Image:
-    fig, ax = plt.subplots(figsize=(10, 5))
-    parsed_dates = pd.to_datetime(dates)
-    for label, values in series.items():
-        if normalized:
-            first = next((v for v in values if v is not None and v != 0), None)
-            plot_values = [
-                v / first * 100 if v is not None and first else float("nan")
-                for v in values
-            ]
-        else:
-            plot_values = values
-        ax.plot(parsed_dates, plot_values, marker="o", label=label)
-    ax.set_title(title)
-    ax.set_xlabel("Date")
-    ax.set_ylabel("Indexed Value (base = 100)" if normalized else "Value")
-    ax.legend()
-    ax.grid(True)
-    fig.autofmt_xdate()
-    buf = BytesIO()
-    plt.savefig(buf, format="png", bbox_inches="tight")
-    plt.close(fig)
-    buf.seek(0)
-    return _save_and_return(buf, filename or "comparison_chart.png")
-
-
-def plot_trading_opportunities(
-    prices: list,
-    short_window: int = 9,
-    long_window: int = 21,
-    title: str = "Trading Opportunities",
-) -> Image:
-    prices_df = pd.DataFrame(prices)
-    prices_df["date"] = pd.to_datetime(prices_df["date"])
-    prices_df = prices_df.join(
-        crossover_signals(prices_df["close"], short_window, long_window)
+def fundamental_chart(
+    points: list[tuple[str, float | None]], ticker: str, metric: str, is_ratio: bool
+) -> bytes:
+    """Bar chart of one metric per fiscal period, oldest first."""
+    labels = [end for end, _ in points]
+    values = [v if v is not None else 0.0 for _, v in points]
+    fig = _new_figure()
+    ax = fig.add_subplot()
+    positions = list(range(len(labels)))
+    bars = ax.bar(
+        positions,
+        values,
+        color=["#4C72B0" if v is not None else "#CCCCCC" for _, v in points],
     )
-    buy_signals = prices_df[prices_df["signal"] == 1]
-    sell_signals = prices_df[prices_df["signal"] == -1]
-    fig, ax = plt.subplots(figsize=(10, 5))
-    ax.plot(
-        prices_df["date"],
-        prices_df["close"],
-        label="Close Price",
-        color="blue",
-        alpha=0.5,
-    )
-    ax.plot(
-        prices_df["date"],
-        prices_df["short_ma"],
-        label=f"Short MA ({short_window})",
-        color="orange",
-    )
-    ax.plot(
-        prices_df["date"],
-        prices_df["long_ma"],
-        label=f"Long MA ({long_window})",
-        color="magenta",
-    )
-    if not buy_signals.empty:
-        plt.scatter(
-            buy_signals["date"],
-            buy_signals["close"],
-            marker="^",
-            color="green",
-            label="Buy Signal",
-            s=100,
-            zorder=5,
+    for bar, (_, v) in zip(bars, points):
+        text = "n/a" if v is None else (f"{v:.1%}" if is_ratio else f"{v:,.3g}")
+        ax.annotate(
+            text,
+            (bar.get_x() + bar.get_width() / 2, bar.get_height()),
+            ha="center",
+            va="bottom",
         )
-    if not sell_signals.empty:
-        plt.scatter(
-            sell_signals["date"],
-            sell_signals["close"],
-            marker="v",
-            color="red",
-            label="Sell Signal",
-            s=100,
-            zorder=5,
-        )
-    ax.set_title(title)
-    ax.set_xlabel("Date")
+    ax.set_xticks(positions, labels)
+    ax.set_title(f"{ticker} {metric.replace('_', ' ')}")
+    ax.set_xlabel("Period end")
+    ax.grid(True, axis="y", alpha=0.3)
+    if is_ratio:
+        ax.yaxis.set_major_formatter(PercentFormatter(1.0))
+    return _to_png(fig)
+
+
+def ma_crossover_chart(
+    df: pd.DataFrame,
+    ticker: str,
+    short_window: int,
+    long_window: int,
+    title: str | None,
+) -> bytes:
+    """Close with both SMAs and markers at the buy/sell signal closes."""
+    sig = crossover_signals(df["close"], short_window, long_window)
+    buys = sig["signal"] == 1
+    sells = sig["signal"] == -1
+    fig = _new_figure()
+    ax = fig.add_subplot()
+    ax.plot(df.index, df["close"], label="Close", color="tab:blue", alpha=0.5)
+    ax.plot(df.index, sig["short_ma"], label=f"SMA {short_window}", color="tab:orange")
+    ax.plot(df.index, sig["long_ma"], label=f"SMA {long_window}", color="tab:purple")
+    ax.scatter(
+        df.index[buys],
+        df["close"][buys],
+        marker="^",
+        color="green",
+        s=100,
+        zorder=5,
+        label="Buy signal",
+    )
+    ax.scatter(
+        df.index[sells],
+        df["close"][sells],
+        marker="v",
+        color="red",
+        s=100,
+        zorder=5,
+        label="Sell signal",
+    )
+    ax.set_title(title or f"{ticker} SMA {short_window}/{long_window} crossover")
     ax.set_ylabel("Price")
     ax.legend()
-    ax.grid(True)
+    ax.grid(True, alpha=0.3)
     fig.autofmt_xdate()
-    buf = BytesIO()
-    plt.savefig(buf, format="png", bbox_inches="tight")
-    plt.close(fig)
-    buf.seek(0)
-    return _save_and_return(buf, "trading_opportunities.png")
+    return _to_png(fig)
