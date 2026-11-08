@@ -1,4 +1,4 @@
-"""Phase 0 smoke tests: the restructured server still exposes the original tools."""
+"""Smoke tests: the server imports and registers the expected tool set."""
 
 import json
 
@@ -7,12 +7,12 @@ from mcp import Client
 
 import main
 
-ORIGINAL_TOOLS = {
-    "retrieve_current_price",
-    "retrieve_stock_data",
-    "retrieve_dividends",
-    "retrieve_splits",
-    "retrieve_ticker_info",
+EXPECTED_TOOLS = {
+    "tearsheet_get_quote",
+    "tearsheet_get_price_history",
+    "tearsheet_get_company_info",
+    "tearsheet_get_dividends",
+    "tearsheet_get_splits",
     "retrieve_financial_statements",
     "mcp_calculate_growth_rates",
     "mcp_calculate_technical_indicators",
@@ -26,10 +26,10 @@ ORIGINAL_TOOLS = {
 
 
 @pytest.mark.anyio
-async def test_original_tools_registered():
+async def test_expected_tools_registered():
     async with Client(main.mcp) as client:
         result = await client.list_tools()
-    assert {t.name for t in result.tools} == ORIGINAL_TOOLS
+    assert {t.name for t in result.tools} == EXPECTED_TOOLS
 
 
 def test_charts_use_non_gui_backend():

@@ -9,7 +9,7 @@ dependencies = [
     "mcp>=2.3.0",
     "mplfinance>=0.12.10b0",
     "pandas>=2.3.0",
-    "yfinance>=0.2.61",
+    "yfinance>=1.8.0",
 ]
 
 [dependency-groups]

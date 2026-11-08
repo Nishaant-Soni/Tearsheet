@@ -52,7 +52,7 @@ def mcp_backtest_strategy(
     Buy signal: short MA crosses above long MA. Sell signal: short MA crosses below long MA.
     Args:
         prices: List of OHLCV dicts with at least 'date' and 'close' keys.
-                Use retrieve_stock_data to obtain this data first.
+                Use tearsheet_get_price_history with response_format='rows' first.
         short_window: Short MA period (default 9).
         long_window:  Long MA period (default 21).
     Returns:

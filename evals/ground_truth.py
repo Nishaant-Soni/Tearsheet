@@ -136,7 +136,7 @@ def q1() -> Result:
     ratios = {}
     for t in ("NVDA", "AVGO", "CMG"):
         s = yf.Ticker(t).splits
-        s.index = s.index.tz_localize(None)
+        s.index = s.index.tz_localize(None).normalize()
         in_2024 = s[(s.index >= "2024-01-01") & (s.index < "2025-01-01")]
         if len(in_2024) != 1:
             raise RuntimeError(f"{t}: expected one 2024 split, got {in_2024}")
@@ -149,7 +149,7 @@ def q2() -> Result:
     totals = {}
     for t in ("KO", "PEP"):
         d = yf.Ticker(t).dividends
-        d.index = d.index.tz_localize(None)
+        d.index = d.index.tz_localize(None).normalize()
         d = d[(d.index >= "2023-01-01") & (d.index < "2024-01-01")]
         totals[t] = float(d.sum())
     return pick(totals, 3)
@@ -157,8 +157,11 @@ def q2() -> Result:
 
 def q3() -> Result:
     s = yf.Ticker("NVDA").splits
-    s.index = s.index.tz_localize(None)
-    split_day = s[(s.index >= "2024-06-01") & (s.index < "2024-07-01")].index[0]
+    s.index = s.index.tz_localize(None).normalize()
+    # yfinance >= 1.x stamps actions at market open (09:30), so compare by date.
+    split_day = (
+        s[(s.index >= "2024-06-01") & (s.index < "2024-07-01")].index[0].normalize()
+    )
     df = history("NVDA", "2024-05-01", "2024-12-01")
     before = df[df.index < split_day]["Close"]
     start_close = before.iloc[-1]
