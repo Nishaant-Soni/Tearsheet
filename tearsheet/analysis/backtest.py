@@ -1,129 +1,191 @@
+"""Moving-average crossover backtest on daily OHLC bars.
+
+Assumptions:
+- Signals use simple moving averages of the close. A buy signal fires at the close
+  of bar t when the short MA closes above the long MA after being at or below it
+  on bar t-1; a sell signal is the reverse.
+- Orders fill at the open of bar t+1, never at the signal bar's close. A signal on
+  the last bar is not filled.
+- Long-only: fully invested or flat. No leverage, shorting or position sizing.
+- `cost_bps` is charged on every entry and exit (5 bps = 0.05% of the trade).
+  There is no other slippage model.
+- Returns are marked to market daily at the close. An open position at the end is
+  valued at the last close and is not counted as a completed trade.
+"""
+
+import math
+from dataclasses import dataclass, field
+
+import numpy as np
 import pandas as pd
 
-
-def calculate_trading_opportunities(
-    prices: pd.DataFrame, short_window: int, long_window: int
-) -> pd.DataFrame:
-    """
-    Calculates trading opportunities from price data. Create signals based on crossovers:
-    - A 'Golden Cross' (bullish signal) occurs when the short-term MA crosses above the long-term MA.
-    - A 'Death Cross' (bearish signal) occurs when the short-term MA crosses below the long-term MA.
-    Args:
-        prices: List of dicts with OHLCV and date.
-        short_window: Short window for the short moving average.
-        long_window: Long window for the long moving average.
-    Returns:
-        pd.DataFrame with trading opportunities.
-    """
-    prices["short_ma"] = prices["close"].rolling(window=short_window).mean()
-    prices["long_ma"] = prices["close"].rolling(window=long_window).mean()
-    prices["prev_short"] = prices["short_ma"].shift(1)
-    prices["prev_long"] = prices["long_ma"].shift(1)
-    prices["signal"] = 0
-    prices.loc[
-        (prices["short_ma"] > prices["long_ma"])
-        & (prices["prev_short"] <= prices["prev_long"]),
-        "signal",
-    ] = 1
-    prices.loc[
-        (prices["short_ma"] < prices["long_ma"])
-        & (prices["prev_short"] >= prices["prev_long"]),
-        "signal",
-    ] = -1
-    return prices
+TRADING_DAYS = 252
 
 
-def backtest_strategy(
-    prices: list, short_window: int = 9, long_window: int = 21
-) -> dict:
-    """
-    Backtests a moving-average crossover strategy (Golden/Death Cross) on historical prices.
-    Args:
-        prices: List of dicts with keys 'date', 'close' (and optionally 'open','high','low','volume').
-        short_window: Short MA window.
-        long_window: Long MA window.
-    Returns:
-        Dict with total_return, buy_and_hold_return, num_trades, win_rate, max_drawdown,
-        sharpe_ratio, and a list of individual trade records.
-    """
-    df = pd.DataFrame(prices)
-    df["date"] = pd.to_datetime(df["date"])
-    df = calculate_trading_opportunities(df, short_window, long_window)
+@dataclass
+class Trade:
+    signal_date: pd.Timestamp
+    entry_date: pd.Timestamp
+    entry_price: float
+    exit_signal_date: pd.Timestamp | None = None
+    exit_date: pd.Timestamp | None = None
+    exit_price: float | None = None
+    ret: float | None = None
+    open_at_end: bool = False
 
-    position = 0
-    entry_price = 0.0
-    trades = []
 
-    for _, row in df.iterrows():
-        if row["signal"] == 1 and position == 0:
-            position = 1
-            entry_price = row["close"]
-            trades.append(
-                {"type": "buy", "date": str(row["date"].date()), "price": entry_price}
+@dataclass
+class BacktestStats:
+    total_return: float
+    buy_and_hold_return: float
+    excess_return: float
+    cagr: float | None
+    annualized_volatility: float | None
+    sharpe_ratio: float | None
+    max_drawdown: float
+    max_drawdown_start: pd.Timestamp | None
+    max_drawdown_end: pd.Timestamp | None
+    num_trades: int
+    win_rate: float | None
+    avg_trade_return: float | None
+    exposure: float
+    trades: list[Trade]
+    buy_signals: list[pd.Timestamp]
+    sell_signals: list[pd.Timestamp]
+    equity: pd.Series
+    notes: list[str] = field(default_factory=list)
+
+
+def crossover_signals(close: pd.Series, short: int, long: int) -> pd.DataFrame:
+    """short_ma, long_ma and signal (+1 buy, -1 sell, 0 none) per bar."""
+    s = close.rolling(short).mean()
+    lg = close.rolling(long).mean()
+    prev_s, prev_l = s.shift(1), lg.shift(1)
+    signal = pd.Series(0, index=close.index)
+    signal[(s > lg) & (prev_s <= prev_l)] = 1
+    signal[(s < lg) & (prev_s >= prev_l)] = -1
+    return pd.DataFrame({"short_ma": s, "long_ma": lg, "signal": signal})
+
+
+def backtest_ma_crossover(
+    df: pd.DataFrame,
+    short_window: int,
+    long_window: int,
+    cost_bps: float = 5.0,
+    risk_free_rate: float = 0.0,
+) -> BacktestStats:
+    if short_window >= long_window:
+        raise ValueError("long_window must be greater than short_window")
+    if len(df) < long_window + 2:
+        raise ValueError(f"need at least {long_window + 2} bars, got {len(df)}")
+    signals = crossover_signals(df["close"], short_window, long_window)["signal"]
+    return run_signals(df, signals.to_numpy(), cost_bps, risk_free_rate)
+
+
+def run_signals(
+    df: pd.DataFrame,
+    signals: np.ndarray,
+    cost_bps: float = 5.0,
+    risk_free_rate: float = 0.0,
+) -> BacktestStats:
+    """Simulate a long-only book from per-bar signals (+1 buy, -1 sell, 0 none)."""
+    opens = df["open"].to_numpy(dtype=float)
+    closes = df["close"].to_numpy(dtype=float)
+    dates = df.index
+    keep = 1.0 - cost_bps / 10_000  # fraction of capital kept after one fill
+
+    n = len(df)
+    daily = np.zeros(n)
+    in_market = np.zeros(n, dtype=bool)  # holding at the close of bar i
+    trades: list[Trade] = []
+    position = False
+    for i in range(1, n):
+        prev_signal = signals[i - 1]
+        if not position and prev_signal == 1:
+            position = True
+            trades.append(Trade(dates[i - 1], dates[i], opens[i]))
+            daily[i] = keep * closes[i] / opens[i] - 1
+        elif position and prev_signal == -1:
+            position = False
+            t = trades[-1]
+            t.exit_signal_date, t.exit_date, t.exit_price = (
+                dates[i - 1],
+                dates[i],
+                opens[i],
             )
-        elif row["signal"] == -1 and position == 1:
-            position = 0
-            pnl = (row["close"] - entry_price) / entry_price
-            trades.append(
-                {
-                    "type": "sell",
-                    "date": str(row["date"].date()),
-                    "price": row["close"],
-                    "pnl": round(pnl, 4),
-                }
-            )
+            t.ret = keep * keep * opens[i] / t.entry_price - 1
+            daily[i] = keep * opens[i] / closes[i - 1] - 1
+        elif position:
+            daily[i] = closes[i] / closes[i - 1] - 1
+        in_market[i] = position
 
-    if position == 1:
-        pnl = (df.iloc[-1]["close"] - entry_price) / entry_price
-        trades.append(
-            {
-                "type": "sell",
-                "date": str(df.iloc[-1]["date"].date()),
-                "price": df.iloc[-1]["close"],
-                "pnl": round(pnl, 4),
-                "note": "open position closed at period end",
-            }
+    notes: list[str] = []
+    if position:
+        t = trades[-1]
+        t.exit_date, t.exit_price, t.open_at_end = dates[-1], closes[-1], True
+        t.ret = keep * closes[-1] / t.entry_price - 1
+        notes.append(
+            "Position still open at the end: marked to the last close, no exit cost, "
+            "not counted in num_trades."
+        )
+    if signals[-1] != 0:
+        notes.append(
+            "A signal on the last bar was not filled (fills happen next open)."
         )
 
-    sell_trades = [t for t in trades if t["type"] == "sell"]
-    if not sell_trades:
-        return {
-            "error": "No completed trades in this period — try a longer date range or different windows",
-            "trades": trades,
-        }
+    equity = pd.Series(np.cumprod(1 + daily), index=dates)
+    total_return = equity.iloc[-1] - 1
+    buy_and_hold = closes[-1] / closes[0] - 1
 
-    pnls = [t["pnl"] for t in sell_trades]
+    years = (dates[-1] - dates[0]).days / 365.25
+    cagr = (
+        (equity.iloc[-1] ** (1 / years) - 1)
+        if years > 0 and equity.iloc[-1] > 0
+        else None
+    )
 
-    total_return = 1.0
-    for p in pnls:
-        total_return *= 1 + p
-    total_return -= 1
-
-    buy_hold = (df.iloc[-1]["close"] - df.iloc[0]["close"]) / df.iloc[0]["close"]
-    win_rate = sum(1 for p in pnls if p > 0) / len(pnls)
-
-    equity = pd.Series([1.0])
-    for p in pnls:
-        equity = pd.concat(
-            [equity, pd.Series([equity.iloc[-1] * (1 + p)])], ignore_index=True
+    rets = daily[1:]
+    std = rets.std(ddof=1) if len(rets) > 1 else 0.0
+    if std > 0 and math.isfinite(std):
+        vol = std * math.sqrt(TRADING_DAYS)
+        sharpe = (
+            (rets.mean() - risk_free_rate / TRADING_DAYS)
+            / std
+            * math.sqrt(TRADING_DAYS)
         )
-    rolling_max = equity.cummax()
-    max_drawdown = ((equity - rolling_max) / rolling_max).min()
-
-    if len(pnls) > 1:
-        mean_r = sum(pnls) / len(pnls)
-        std_r = (sum((p - mean_r) ** 2 for p in pnls) / (len(pnls) - 1)) ** 0.5
-        sharpe = (mean_r / std_r) if std_r > 0 else None
     else:
-        sharpe = None
+        vol, sharpe = (0.0 if std == 0 else None), None
 
-    return {
-        "total_return": round(total_return, 4),
-        "buy_and_hold_return": round(buy_hold, 4),
-        "outperformance": round(total_return - buy_hold, 4),
-        "num_trades": len(sell_trades),
-        "win_rate": round(win_rate, 4),
-        "max_drawdown": round(max_drawdown, 4),
-        "sharpe_ratio": round(sharpe, 4) if sharpe is not None else None,
-        "trades": trades,
-    }
+    drawdown = equity / equity.cummax() - 1
+    max_dd = float(drawdown.min())
+    dd_start = dd_end = None
+    if max_dd < 0:
+        dd_end = drawdown.idxmin()
+        dd_start = equity.loc[:dd_end].idxmax()
+
+    closed = [t for t in trades if not t.open_at_end]
+    if not closed:
+        notes.append(
+            "No completed trades in this range; try a longer range or shorter windows."
+        )
+    returns = [t.ret for t in closed if t.ret is not None]
+    return BacktestStats(
+        total_return=total_return,
+        buy_and_hold_return=buy_and_hold,
+        excess_return=total_return - buy_and_hold,
+        cagr=cagr,
+        annualized_volatility=vol,
+        sharpe_ratio=sharpe,
+        max_drawdown=max_dd,
+        max_drawdown_start=dd_start,
+        max_drawdown_end=dd_end,
+        num_trades=len(closed),
+        win_rate=sum(r > 0 for r in returns) / len(returns) if returns else None,
+        avg_trade_return=sum(returns) / len(returns) if returns else None,
+        exposure=float(in_market.mean()),
+        trades=trades,
+        buy_signals=list(dates[signals == 1]),
+        sell_signals=list(dates[signals == -1]),
+        equity=equity,
+        notes=notes,
+    )

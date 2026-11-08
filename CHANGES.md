@@ -14,6 +14,9 @@ and deviations from the spec.
 | `retrieve_splits` | `tearsheet_get_splits` | Phase 1 |
 | `retrieve_financial_statements` | `tearsheet_get_financial_statement` | Phase 2 |
 | `mcp_calculate_financial_metrics` | `tearsheet_get_fundamentals` | Phase 2 |
+| `mcp_calculate_technical_indicators` | `tearsheet_calculate_indicator` | Phase 3 |
+| `mcp_calculate_growth_rates` | `tearsheet_calculate_growth_rates` | Phase 3 |
+| `mcp_backtest_strategy` | `tearsheet_backtest_ma_crossover` | Phase 3 |
 
 ## Renamed metrics
 
@@ -52,6 +55,27 @@ name), `fcf_margin`. `tearsheet_get_fundamentals` computes all 17 metrics by def
 - **`pe_ratio`** uses reported diluted EPS (it divided net income by a share count the
   model had to supply) and is null when EPS <= 0. **`dividend_yield`** uses trailing
   12 months of `Ticker.dividends`.
+- **Indicators and the backtest take `ticker` + dates** and fetch prices on the server.
+  The model no longer passes price arrays. Indicator output defaults to a summary
+  (latest, min, max per series); `response_format="rows"` returns capped rows.
+- **`volatility` is annualized:** rolling std of returns times sqrt(252) for daily
+  bars (52 weekly, 12 monthly). It was the daily std. Intraday intervals are rejected.
+- **MACD** takes `fast`, `slow`, `signal` (12/26/9) and returns `macd`, `signal`,
+  `histogram`. It used fixed 12/26/9 and silently ignored `window`.
+- **RSI** returns 100 when there are no losses (was inf/NaN) and nulls for the first
+  `window` bars. **Bollinger bands** take `num_std`. **ATR and stochastic** use real
+  high/low now that OHLC is fetched on the server.
+- **Growth:** `annualized_growth_rate` renamed to `cagr`, annualized with
+  `periods_per_year`. CAGR is null with a note when the first or last value is <= 0;
+  it could return a complex number.
+- **Backtest rewritten:** signals at bar t's close fill at bar t+1's open (was the
+  signal bar's close, a look-ahead). `cost_bps` (default 5) is charged on each entry
+  and exit. Metrics come from a daily mark-to-market equity curve: `max_drawdown`
+  with start/end dates now includes drawdowns inside open positions (it only looked
+  at trade exits), and `sharpe_ratio` is annualized with `risk_free_rate` (it was
+  mean/std of per-trade returns). Adds `cagr`, `annualized_volatility`, `exposure`,
+  `avg_trade_return`. `outperformance` renamed to `excess_return`. Zero trades is no
+  longer an error.
 - All yfinance calls run in worker threads. Price histories and dividend/split series
   are cached in-process: 15 minutes for intraday or ranges ending today, 4 hours
   otherwise.
@@ -97,5 +121,16 @@ name), `fcf_margin`. `tearsheet_get_fundamentals` computes all 17 metrics by def
 - **`inputs_used` is keyed by period end** (`{period_end: {field: value}}`), holding only
   the inputs the requested metrics read.
 - **Null metrics carry a note** naming the missing inputs, e.g. gross margin for banks.
+- **Backtest `num_trades` counts completed round trips only.** An open position at the
+  end is listed in `trades` with `open_at_end: true`, marked to the last close without
+  an exit cost. The old code force-closed it and counted it.
+- **Backtest adds `buy_signal_dates` and `sell_signal_dates`**, listing every crossover
+  (including a sell signal while flat, which does not trade), and an `adjusted` flag.
+- **Indicators accept `interval`** (needed to annualize volatility and to reject it
+  for intraday bars) and are computed from bars in the requested range only, so the
+  first values are warm-up nulls. No extra history is fetched before `start_date`.
+- **RSI is 50 when the price does not move at all** (both average gain and loss are
+  0); the spec only defines the zero-loss case.
+- **Period growth divides by |prev|**, as before, so -50 to -25 is +0.5.
 - **`tearsheet/serialize.py` added** (not in the spec's layout) for NaN/inf to `None`,
   rounding, summaries and row downsampling, shared by all tool wrappers.

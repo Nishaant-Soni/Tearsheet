@@ -13,7 +13,7 @@ import matplotlib.pyplot as plt  # noqa: E402
 import pandas as pd
 from mcp.server.mcpserver import Image
 
-from tearsheet.analysis.backtest import calculate_trading_opportunities
+from tearsheet.analysis.backtest import crossover_signals
 
 _DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "data")
 os.makedirs(_DATA_DIR, exist_ok=True)
@@ -139,7 +139,9 @@ def plot_trading_opportunities(
 ) -> Image:
     prices_df = pd.DataFrame(prices)
     prices_df["date"] = pd.to_datetime(prices_df["date"])
-    prices_df = calculate_trading_opportunities(prices_df, short_window, long_window)
+    prices_df = prices_df.join(
+        crossover_signals(prices_df["close"], short_window, long_window)
+    )
     buy_signals = prices_df[prices_df["signal"] == 1]
     sell_signals = prices_df[prices_df["signal"] == -1]
     fig, ax = plt.subplots(figsize=(10, 5))

@@ -2,12 +2,11 @@ from datetime import date, timedelta
 from functools import partial
 from typing import Annotated
 
+from mcp.server.mcpserver.exceptions import ToolError
 from pydantic import Field
 
-from server import READ_ONLY_REMOTE, mcp
-from tearsheet.analysis.backtest import backtest_strategy
-from tearsheet.analysis.growth import calculate_growth_rates
-from tearsheet.analysis.indicators import calculate_technical_indicators
+from server import PURE_COMPUTE, READ_ONLY_REMOTE, mcp
+from tearsheet.analysis import backtest, growth, indicators
 from tearsheet.analysis.ratios import (
     ALL_METRICS,
     CURRENCY_METRICS,
@@ -20,78 +19,237 @@ from tearsheet.analysis.ratios import (
 from tearsheet.data import fundamentals, market
 from tearsheet.data.fundamentals import FIELD_STATEMENT, LABELS
 from tearsheet.models import (
+    INTRADAY_INTERVALS,
     AsOfPrice,
+    BacktestResult,
+    BacktestTrade,
+    CostBps,
+    EndDate,
+    FastPeriod,
     FundamentalMetric,
     FundamentalsPeriod,
     FundamentalsResult,
+    GrowthResult,
+    Indicator,
+    IndicatorResult,
+    Interval,
+    LongWindow,
+    MaxRows,
+    NumStd,
     Period,
+    ResponseFormat,
+    RiskFreeRate,
+    ShortWindow,
+    SignalPeriod,
+    SlowPeriod,
+    StartDate,
     Ticker,
+    Window,
+    resolve_range,
 )
-from tearsheet.serialize import RATIO_DP, num
+from tearsheet.serialize import RATIO_DP, frame_rows, num, series_summary
 
 
-@mcp.tool()
-def mcp_calculate_growth_rates(series: list) -> dict:
+@mcp.tool(name="tearsheet_calculate_indicator", annotations=READ_ONLY_REMOTE)
+async def calculate_indicator(
+    ticker: Ticker,
+    indicator: Indicator,
+    start_date: StartDate,
+    end_date: EndDate = None,
+    interval: Interval = "1d",
+    window: Window = 14,
+    fast: FastPeriod = 12,
+    slow: SlowPeriod = 26,
+    signal: SignalPeriod = 9,
+    num_std: NumStd = 2.0,
+    response_format: ResponseFormat = "summary",
+    max_rows: MaxRows = 100,
+) -> IndicatorResult:
+    """Compute a technical indicator for one ticker over a date range.
+
+    Prices are fetched on the server (adjusted closes); computed from bars in the
+    range only, so the first values are warm-up nulls. Outputs: sma, ema (price);
+    rsi (0-100, Wilder; 100 if no losses); macd -> macd, signal, histogram (uses
+    fast/slow/signal and ignores window); volatility (rolling std of returns,
+    annualized, fraction; 1d/1wk/1mo only); bollinger_bands -> upper, middle,
+    lower (num_std); atr (Wilder, price units); stochastic -> k, d (0-100).
+
+    response_format='summary' (default) returns, per output series, the latest
+    value and date plus min/max with dates. 'rows' adds {date, close, series...}
+    rows capped at max_rows (evenly downsampled, truncated=true).
+
+    Example: {"ticker": "AAPL", "indicator": "rsi", "start_date": "2023-01-01",
+              "end_date": "2023-12-31", "window": 14}
     """
-    Calculates growth rates for a time series (e.g., revenue, earnings).
-    Args:
-        series: List of numbers ordered oldest to newest.
-    Returns:
-        Dict with annualized growth rate and list of period-over-period growth rates.
-    """
-    return calculate_growth_rates(series)
+    rng = resolve_range(start_date, end_date, interval)
+    if indicator == "volatility" and interval in INTRADAY_INTERVALS:
+        raise ToolError(
+            "volatility is annualized only for 1d, 1wk or 1mo bars. Use one of those "
+            "intervals."
+        )
+    if indicator == "macd" and fast >= slow:
+        raise ToolError(f"MACD needs fast < slow, got fast={fast}, slow={slow}.")
+    df = await market.get_history(ticker, rng.start, rng.end, interval)
+    out = indicators.compute(
+        df, indicator, window, fast, slow, signal, num_std, interval
+    )
+    intraday = interval in INTRADAY_INTERVALS
+
+    if indicator == "macd":
+        params = {"fast": fast, "slow": slow, "signal": signal}
+    elif indicator == "bollinger_bands":
+        params = {"window": window, "num_std": num_std}
+    else:
+        params = {"window": window}
+    notes = []
+    if out.notna().sum().min() == 0:
+        notes.append(
+            f"Only {len(df)} bars in range, too few for these parameters; every value "
+            "is null. Widen the date range."
+        )
+    rows, truncated = None, False
+    if response_format == "rows":
+        rows, truncated = frame_rows(
+            out.assign(close=df["close"])[["close", *out.columns]], max_rows, intraday
+        )
+    return IndicatorResult(
+        ticker=ticker,
+        indicator=indicator,
+        interval=interval,
+        start_date=str(rng.start),
+        end_date=str(rng.end),
+        params=params,
+        last_close=num(df["close"].iloc[-1]),
+        summary={c: series_summary(out[c], intraday) for c in out.columns},
+        response_format=response_format,
+        rows=rows,
+        truncated=truncated,
+        total_rows=len(out),
+        notes=notes,
+    )
 
 
-@mcp.tool()
-def mcp_calculate_technical_indicators(
-    price_data: list, indicator: str, window: int = 14
-) -> dict:
+@mcp.tool(name="tearsheet_calculate_growth_rates", annotations=PURE_COMPUTE)
+async def calculate_growth_rates(
+    values: Annotated[
+        list[float],
+        Field(min_length=2, max_length=200, description="Series, oldest to newest."),
+    ],
+    periods_per_year: Annotated[
+        int, Field(ge=1, le=365, description="1 for annual values, 4 for quarterly.")
+    ] = 1,
+) -> GrowthResult:
+    """Compute period-over-period growth and CAGR for a short series of numbers.
+
+    Use for revenue, EPS or other values you already have (e.g. from
+    tearsheet_get_financial_statement). Takes the numbers directly, oldest first.
+
+    period_growth_rates: (curr - prev) / |prev| per step, null when prev is 0.
+    cagr: (last / first) ** (periods_per_year / (n - 1)) - 1, null with a note when
+    first or last is <= 0. All values are fractions (0.12 = 12%).
+
+    Example: {"values": [60922, 130497, 215938], "periods_per_year": 1}
     """
-    Calculates technical indicators on stock price data.
-    Args:
-        price_data: List of closing prices (numbers) OR list of OHLCV dicts with keys
-                    'open', 'high', 'low', 'close'. The OHLCV dict form is required for
-                    'atr' and 'stochastic'; either form works for all others.
-        indicator: One of:
-                   'sma'            – Simple Moving Average
-                   'ema'            – Exponential Moving Average
-                   'rsi'            – Relative Strength Index (Wilder's smoothing)
-                   'macd'           – MACD line + signal line
-                   'volatility'     – Rolling annualised volatility
-                   'bollinger_bands'– Upper / middle / lower bands (2-sigma)
-                   'atr'            – Average True Range (needs OHLCV dicts)
-                   'stochastic'     – Stochastic %K and %D (needs OHLCV dicts)
-        window: Lookback window (default 14).
-    Returns:
-        Dict with indicator values as lists.
-    """
-    return calculate_technical_indicators(price_data, indicator, window)
+    g = growth.calculate_growth_rates(values, periods_per_year)
+    return GrowthResult(
+        values=values,
+        periods_per_year=periods_per_year,
+        period_growth_rates=[num(r, RATIO_DP) for r in g.period_growth_rates],
+        cagr=num(g.cagr, RATIO_DP),
+        notes=g.notes,
+    )
 
 
-@mcp.tool()
-def mcp_backtest_strategy(
-    prices: list, short_window: int = 9, long_window: int = 21
-) -> dict:
+def _day(ts) -> str | None:
+    return None if ts is None else ts.strftime("%Y-%m-%d")
+
+
+@mcp.tool(name="tearsheet_backtest_ma_crossover", annotations=READ_ONLY_REMOTE)
+async def backtest_ma_crossover(
+    ticker: Ticker,
+    start_date: StartDate,
+    end_date: EndDate = None,
+    short_window: ShortWindow = 9,
+    long_window: LongWindow = 21,
+    cost_bps: CostBps = 5.0,
+    risk_free_rate: RiskFreeRate = 0.0,
+    adjusted: bool = True,
+) -> BacktestResult:
+    """Backtest a long-only SMA crossover strategy on daily bars for one ticker.
+
+    Buy when the short SMA closes above the long SMA after being at or below it;
+    sell on the reverse. Assumptions: signal at bar t's close, fill at bar t+1's
+    open (a last-bar signal is not filled); fully invested or flat; cost_bps on
+    each entry and exit, no other slippage; adjusted prices by default; MAs use
+    only bars in the range.
+
+    Returns fractions: total_return, buy_and_hold_return, excess_return, cagr,
+    annualized_volatility (daily std * sqrt(252)), sharpe_ratio ((mean daily -
+    rf/252) / std * sqrt(252); null if no variance), max_drawdown with start/end
+    dates from the daily mark-to-market curve, win_rate, avg_trade_return,
+    exposure. num_trades counts completed round trips. trades list signal_date,
+    entry/exit fills and return; buy_signal_dates and sell_signal_dates list every
+    crossover.
+
+    Example: {"ticker": "MSFT", "start_date": "2023-01-01", "end_date":
+              "2023-12-31", "short_window": 20, "long_window": 50}
     """
-    Backtests a moving-average crossover strategy (Golden Cross / Death Cross) on historical prices.
-    Buy signal: short MA crosses above long MA. Sell signal: short MA crosses below long MA.
-    Args:
-        prices: List of OHLCV dicts with at least 'date' and 'close' keys.
-                Use tearsheet_get_price_history with response_format='rows' first.
-        short_window: Short MA period (default 9).
-        long_window:  Long MA period (default 21).
-    Returns:
-        Dict with:
-          total_return        – Strategy compound return over the period
-          buy_and_hold_return – Passive return over the same period
-          outperformance      – total_return minus buy_and_hold_return
-          num_trades          – Number of completed round-trip trades
-          win_rate            – Fraction of trades that were profitable
-          max_drawdown        – Worst peak-to-trough loss on the equity curve
-          sharpe_ratio        – Return / std-dev of per-trade returns (approximate)
-          trades              – List of individual buy/sell records with dates and P&L
-    """
-    return backtest_strategy(prices, short_window, long_window)
+    if long_window <= short_window:
+        raise ToolError(
+            f"long_window ({long_window}) must be greater than short_window "
+            f"({short_window})."
+        )
+    rng = resolve_range(start_date, end_date, "1d")
+    df = await market.get_history(ticker, rng.start, rng.end, "1d", adjusted)
+    if len(df) < long_window + 2:
+        raise ToolError(
+            f"Only {len(df)} daily bars between {rng.start} and {rng.end}; need at "
+            f"least {long_window + 2} for long_window={long_window}. Use an earlier "
+            "start_date or a shorter long_window."
+        )
+    bt = backtest.backtest_ma_crossover(
+        df, short_window, long_window, cost_bps, risk_free_rate
+    )
+    return BacktestResult(
+        ticker=ticker,
+        start_date=str(rng.start),
+        end_date=str(rng.end),
+        bars=len(df),
+        short_window=short_window,
+        long_window=long_window,
+        cost_bps=cost_bps,
+        risk_free_rate=risk_free_rate,
+        adjusted=adjusted,
+        total_return=num(bt.total_return, RATIO_DP),
+        buy_and_hold_return=num(bt.buy_and_hold_return, RATIO_DP),
+        excess_return=num(bt.excess_return, RATIO_DP),
+        cagr=num(bt.cagr, RATIO_DP),
+        annualized_volatility=num(bt.annualized_volatility, RATIO_DP),
+        sharpe_ratio=num(bt.sharpe_ratio, RATIO_DP),
+        max_drawdown=num(bt.max_drawdown, RATIO_DP),
+        max_drawdown_start=_day(bt.max_drawdown_start),
+        max_drawdown_end=_day(bt.max_drawdown_end),
+        num_trades=bt.num_trades,
+        win_rate=num(bt.win_rate, RATIO_DP),
+        avg_trade_return=num(bt.avg_trade_return, RATIO_DP),
+        exposure=num(bt.exposure, RATIO_DP),
+        trades=[
+            BacktestTrade(
+                signal_date=_day(t.signal_date),
+                entry_date=_day(t.entry_date),
+                entry_price=num(t.entry_price),
+                exit_signal_date=_day(t.exit_signal_date),
+                exit_date=_day(t.exit_date),
+                exit_price=num(t.exit_price),
+                return_=num(t.ret, RATIO_DP),
+                open_at_end=t.open_at_end,
+            )
+            for t in bt.trades
+        ],
+        buy_signal_dates=[_day(d) for d in bt.buy_signals],
+        sell_signal_dates=[_day(d) for d in bt.sell_signals],
+        notes=bt.notes,
+    )
 
 
 @mcp.tool(name="tearsheet_get_fundamentals", annotations=READ_ONLY_REMOTE)

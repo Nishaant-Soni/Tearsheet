@@ -8,3 +8,8 @@ mcp = MCPServer("tearsheet")
 READ_ONLY_REMOTE = ToolAnnotations(
     readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=True
 )
+
+# Tools that only compute on their inputs, with no external calls.
+PURE_COMPUTE = ToolAnnotations(
+    readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False
+)

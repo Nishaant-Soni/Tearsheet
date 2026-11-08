@@ -274,3 +274,110 @@ class FundamentalsResult(BaseModel):
         description="period_end -> canonical inputs the requested metrics read."
     )
     notes: list[str]
+
+
+# ---------------------------------------------------------------- analysis
+
+Indicator = Literal[
+    "sma", "ema", "rsi", "macd", "volatility", "bollinger_bands", "atr", "stochastic"
+]
+FastPeriod = Annotated[int, Field(ge=2, le=200, description="MACD fast EMA span.")]
+SlowPeriod = Annotated[int, Field(ge=3, le=500, description="MACD slow EMA span.")]
+SignalPeriod = Annotated[int, Field(ge=2, le=100, description="MACD signal EMA span.")]
+NumStd = Annotated[
+    float, Field(ge=0.5, le=5.0, description="Bollinger band width in std devs.")
+]
+ShortWindow = Annotated[int, Field(ge=2, le=200, description="Short SMA window, days.")]
+LongWindow = Annotated[int, Field(ge=3, le=500, description="Long SMA window, days.")]
+CostBps = Annotated[
+    float,
+    Field(ge=0, le=100, description="Cost per entry and per exit, basis points."),
+]
+RiskFreeRate = Annotated[
+    float, Field(ge=0, le=0.2, description="Annual risk-free rate, fraction.")
+]
+
+
+class SeriesSummary(BaseModel):
+    latest: float | None
+    latest_date: str | None
+    min: float | None
+    min_date: str | None
+    max: float | None
+    max_date: str | None
+
+
+class IndicatorResult(BaseModel):
+    ticker: str
+    indicator: str
+    interval: str
+    start_date: str
+    end_date: str
+    params: dict[str, int | float]
+    last_close: float | None
+    summary: dict[str, SeriesSummary] = Field(
+        description="Per output series: latest value plus min/max over the range."
+    )
+    response_format: str
+    rows: list[dict[str, float | str | None]] | None = Field(
+        default=None, description="date, close and each series; rows format only."
+    )
+    truncated: bool = False
+    total_rows: int
+    notes: list[str]
+
+
+class GrowthResult(BaseModel):
+    values: list[float]
+    periods_per_year: int
+    period_growth_rates: list[float | None] = Field(
+        description="(curr - prev) / |prev| per step, fraction; null if prev is 0."
+    )
+    cagr: float | None = Field(description="Compound annual growth rate, fraction.")
+    notes: list[str]
+
+
+class BacktestTrade(BaseModel):
+    signal_date: str = Field(description="Close of the bar where the buy signal fired.")
+    entry_date: str = Field(description="Fill date: the next bar's open.")
+    entry_price: float | None
+    exit_signal_date: str | None
+    exit_date: str | None
+    exit_price: float | None
+    return_: float | None = Field(
+        alias="return", serialization_alias="return", description="Net of costs."
+    )
+    open_at_end: bool
+
+    model_config = {"populate_by_name": True}
+
+
+class BacktestResult(BaseModel):
+    ticker: str
+    start_date: str
+    end_date: str
+    bars: int
+    short_window: int
+    long_window: int
+    cost_bps: float
+    risk_free_rate: float
+    adjusted: bool
+    total_return: float | None = Field(description="Fraction, net of costs.")
+    buy_and_hold_return: float | None
+    excess_return: float | None
+    cagr: float | None
+    annualized_volatility: float | None
+    sharpe_ratio: float | None
+    max_drawdown: float | None = Field(
+        description="Worst peak-to-trough, fraction <= 0."
+    )
+    max_drawdown_start: str | None
+    max_drawdown_end: str | None
+    num_trades: int = Field(description="Completed round trips.")
+    win_rate: float | None
+    avg_trade_return: float | None
+    exposure: float | None = Field(description="Fraction of bars holding a position.")
+    trades: list[BacktestTrade]
+    buy_signal_dates: list[str]
+    sell_signal_dates: list[str]
+    notes: list[str]

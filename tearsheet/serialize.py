@@ -6,7 +6,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from tearsheet.models import HistorySummary, PriceRow
+from tearsheet.models import HistorySummary, PriceRow, SeriesSummary
 
 PRICE_DP = 4
 RATIO_DP = 4
@@ -97,5 +97,39 @@ def to_rows(
             volume=integer(r.volume),
         )
         for ts, r in zip(df.index[positions], df.iloc[positions].itertuples())
+    ]
+    return rows, len(positions) < len(df)
+
+
+def series_summary(series: pd.Series, intraday: bool = False) -> SeriesSummary:
+    valid = series.dropna()
+    if valid.empty:
+        return SeriesSummary(
+            latest=None,
+            latest_date=None,
+            min=None,
+            min_date=None,
+            max=None,
+            max_date=None,
+        )
+    return SeriesSummary(
+        latest=num(valid.iloc[-1]),
+        latest_date=fmt_date(valid.index[-1], intraday),
+        min=num(valid.min()),
+        min_date=fmt_date(valid.idxmin(), intraday),
+        max=num(valid.max()),
+        max_date=fmt_date(valid.idxmax(), intraday),
+    )
+
+
+def frame_rows(
+    df: pd.DataFrame, max_rows: int, intraday: bool = False
+) -> tuple[list[dict[str, float | str | None]], bool]:
+    """Generic row records ({date, col: value}) capped at `max_rows`."""
+    positions = downsample_positions(len(df), max_rows)
+    sub = df.iloc[positions]
+    rows = [
+        {"date": fmt_date(ts, intraday), **{c: num(v) for c, v in row.items()}}
+        for ts, row in sub.iterrows()
     ]
     return rows, len(positions) < len(df)
