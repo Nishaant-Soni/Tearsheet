@@ -18,6 +18,7 @@ from tearsheet.models import (
     ComparisonTickers,
     EndDate,
     LongWindow,
+    Normalized,
     Period,
     PeriodValue,
     PlotMetric,
@@ -124,7 +125,7 @@ async def plot_comparison(
     tickers: ComparisonTickers,
     start_date: StartDate,
     end_date: EndDate = None,
-    normalized: bool = True,
+    normalized: Normalized = True,
     title: Title = None,
 ) -> ChartOutput:
     """Plot daily closes for 2 to 8 tickers on one chart.

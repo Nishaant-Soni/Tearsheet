@@ -5,6 +5,7 @@ from server import READ_ONLY_REMOTE, mcp
 from tearsheet.data import fundamentals, market
 from tearsheet.models import (
     INTRADAY_INTERVALS,
+    Adjusted,
     CompanyInfo,
     DividendsResult,
     EndDate,
@@ -16,6 +17,7 @@ from tearsheet.models import (
     PriceHistoryResult,
     Quote,
     ResponseFormat,
+    SinceDate,
     SplitsResult,
     StartDate,
     Statement,
@@ -49,7 +51,7 @@ async def get_price_history(
     start_date: StartDate,
     end_date: EndDate = None,
     interval: Interval = "1d",
-    adjusted: bool = True,
+    adjusted: Adjusted = True,
     response_format: ResponseFormat = "summary",
     max_rows: MaxRows = 100,
 ) -> PriceHistoryResult:
@@ -124,7 +126,7 @@ async def get_company_info(ticker: Ticker) -> CompanyInfo:
 
 @mcp.tool(name="tearsheet_get_dividends", annotations=READ_ONLY_REMOTE)
 async def get_dividends(
-    ticker: Ticker, start_date: StartDate | None = None
+    ticker: Ticker, start_date: SinceDate = None
 ) -> DividendsResult:
     """Get cash dividends per share by ex-date for one ticker.
 

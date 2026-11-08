@@ -12,6 +12,7 @@ from tearsheet.analysis.ratios import (
 from tearsheet.data import market
 from tearsheet.models import (
     INTRADAY_INTERVALS,
+    Adjusted,
     BacktestResult,
     BacktestTrade,
     CostBps,
@@ -167,7 +168,7 @@ async def backtest_ma_crossover(
     long_window: LongWindow = 21,
     cost_bps: CostBps = 5.0,
     risk_free_rate: RiskFreeRate = 0.0,
-    adjusted: bool = True,
+    adjusted: Adjusted = True,
 ) -> BacktestResult:
     """Backtest a long-only SMA crossover strategy on daily bars for one ticker.
 

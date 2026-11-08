@@ -40,8 +40,27 @@ EndDate = Annotated[
         examples=["2024-12-31"],
     ),
 ]
-Interval = Literal["1m", "5m", "15m", "30m", "1h", "1d", "1wk", "1mo"]
-ResponseFormat = Literal["summary", "rows"]
+IntervalValue = Literal["1m", "5m", "15m", "30m", "1h", "1d", "1wk", "1mo"]
+Interval = Annotated[
+    IntervalValue,
+    Field(
+        description=(
+            "Bar size. Intraday ('1m'..'1h') has limited history: '1m' spans at "
+            "most 7 days within the last 30, '5m'/'15m'/'30m' the last 60 days, "
+            "'1h' the last 730 days."
+        )
+    ),
+]
+ResponseFormatValue = Literal["summary", "rows"]
+ResponseFormat = Annotated[
+    ResponseFormatValue,
+    Field(
+        description=(
+            "'summary' (default) returns headline numbers; 'rows' also returns "
+            "individual bars, capped at max_rows."
+        )
+    ),
+]
 MaxRows = Annotated[
     int,
     Field(
@@ -52,6 +71,28 @@ MaxRows = Annotated[
     ),
 ]
 Window = Annotated[int, Field(ge=2, le=500, description="Lookback window in bars.")]
+Adjusted = Annotated[
+    bool,
+    Field(
+        description="true (default): prices adjusted for splits and dividends. "
+        "false: split-adjusted but not dividend-adjusted."
+    ),
+]
+Normalized = Annotated[
+    bool,
+    Field(
+        description="true (default): rebase each ticker to 100 at its first close. "
+        "false: plot raw closes."
+    ),
+]
+SinceDate = Annotated[
+    date | None,
+    Field(
+        description="Only include events on or after this date, YYYY-MM-DD. "
+        "Omit for the full history.",
+        examples=["2023-01-01"],
+    ),
+]
 
 INTRADAY_INTERVALS = frozenset({"1m", "5m", "15m", "30m", "1h"})
 
@@ -202,8 +243,20 @@ class SplitsResult(BaseModel):
 
 # ------------------------------------------------------------ fundamentals
 
-Statement = Literal["income_statement", "balance_sheet", "cash_flow"]
-Period = Literal["annual", "quarterly"]
+StatementValue = Literal["income_statement", "balance_sheet", "cash_flow"]
+Statement = Annotated[
+    StatementValue,
+    Field(description=("Which financial statement to return.")),
+]
+PeriodValue = Literal["annual", "quarterly"]
+Period = Annotated[
+    PeriodValue,
+    Field(
+        description=(
+            "'annual' (about 4 fiscal years) or 'quarterly' (about 5 quarters)."
+        )
+    ),
+]
 FundamentalMetric = Literal[
     "gross_margin",
     "operating_margin",
@@ -278,8 +331,17 @@ class FundamentalsResult(BaseModel):
 
 # ---------------------------------------------------------------- analysis
 
-Indicator = Literal[
+IndicatorValue = Literal[
     "sma", "ema", "rsi", "macd", "volatility", "bollinger_bands", "atr", "stochastic"
+]
+Indicator = Annotated[
+    IndicatorValue,
+    Field(
+        description=(
+            "Indicator to compute. macd uses fast/slow/signal; the others use "
+            "window (bollinger_bands also num_std)."
+        )
+    ),
 ]
 FastPeriod = Annotated[int, Field(ge=2, le=200, description="MACD fast EMA span.")]
 SlowPeriod = Annotated[int, Field(ge=3, le=500, description="MACD slow EMA span.")]
@@ -385,8 +447,16 @@ class BacktestResult(BaseModel):
 
 # ------------------------------------------------------------------ charts
 
-ChartType = Literal["line", "candlestick"]
-PlotMetric = Literal[
+ChartTypeValue = Literal["line", "candlestick"]
+ChartType = Annotated[
+    ChartTypeValue,
+    Field(
+        description=(
+            "'line' plots closes; 'candlestick' plots OHLC with a volume panel."
+        )
+    ),
+]
+PlotMetricValue = Literal[
     "gross_margin",
     "operating_margin",
     "net_margin",
@@ -401,6 +471,15 @@ PlotMetric = Literal[
     "roe",
     "roa",
     "book_value_per_share",
+]
+PlotMetric = Annotated[
+    PlotMetricValue,
+    Field(
+        description=(
+            "Statement-based metric to plot (same definitions as "
+            "tearsheet_get_fundamentals)."
+        )
+    ),
 ]
 Title = Annotated[
     str | None,

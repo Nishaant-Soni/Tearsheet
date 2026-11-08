@@ -130,6 +130,21 @@ async def test_enumerated_parameters_are_enums():
 
 
 @pytest.mark.anyio
+async def test_every_parameter_has_a_description():
+    tools = await list_tools()
+    missing = [
+        f"{name}.{param}"
+        for name, tool in tools.items()
+        for param, prop in tool.input_schema["properties"].items()
+        if not (
+            prop.get("description")
+            or resolve(tool.input_schema, prop).get("description")
+        )
+    ]
+    assert missing == []
+
+
+@pytest.mark.anyio
 async def test_no_filenames_or_price_arrays():
     tools = await list_tools()
     for name, tool in tools.items():

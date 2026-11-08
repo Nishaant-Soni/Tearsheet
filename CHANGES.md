@@ -106,8 +106,9 @@ name), `fcf_margin`. `tearsheet_get_fundamentals` computes all 17 metrics by def
   prefer ticker-based tools over passing data between tools, ratios are fractions,
   dates are inclusive, summaries are the default.
 - **Every tool** has a `tearsheet_` name, typed inputs with enums for fixed choices,
-  tool annotations, an output schema, and a docstring (under 25 lines) covering when
-  to use it versus related tools, units, outputs and an example call.
+  a schema description on every parameter, tool annotations, an output schema, and a
+  docstring (under 25 lines) covering when to use it versus related tools, units,
+  outputs and an example call.
 - All yfinance calls run in worker threads. Price histories and dividend/split series
   are cached in-process: 15 minutes for intraday or ranges ending today, 4 hours
   otherwise.
@@ -177,6 +178,23 @@ name), `fcf_margin`. `tearsheet_get_fundamentals` computes all 17 metrics by def
   `tearsheet/tools/common.py` (the fundamentals fetch-and-compute step shared by
   `tearsheet_get_fundamentals` and `tearsheet_plot_fundamental`), neither in the
   spec's layout. `viz/charts.py` stays pure.
+- **Tests fake yfinance instead of monkeypatching `data/`.** The spec says to
+  monkeypatch the data layer. The tests replace `yfinance.Ticker` and `yfinance.Search`
+  with an in-memory fake instead, so the data layer itself (normalization, caching,
+  error mapping) is exercised too, and outbound sockets are refused as a backstop. The
+  scenario price series (trending, flat, crossover-producing, intra-trade drawdown) are
+  built in the test modules that use them (`test_backtest.py`, `test_analysis_tools.py`,
+  `test_tool_schemas.py`); `conftest.py` holds the shared builders (`make_ohlcv`,
+  `make_actions`, `make_statement`) and the fake.
+- **Eval results do not record tokens.** The spec asks for input/output tokens if the
+  client reports them. Claude Desktop does not, so the Tokens column was dropped from
+  `evals/EVAL_RESULTS.md` rather than left as `n/a` in every row.
+- **Eval Q10 can be answered with one tool call.** The spec requires every question to
+  need 2 or more calls. Q10 (NVDA revenue CAGR) was meant as statement +
+  `tearsheet_calculate_growth_rates`, but one statement call returns both revenue
+  figures and Claude computed the CAGR by hand in both runs (1 call each). The question
+  was kept unchanged so the before/after comparison stays like-for-like. Q1 needs three
+  splits calls on both surfaces; Claude answered it from its own knowledge in both runs.
 - **`tearsheet/serialize.py` added** (not in the spec's layout) for NaN/inf to `None`,
   rounding, summaries and row downsampling, shared by all tool wrappers.
 
