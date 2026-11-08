@@ -1,59 +1,64 @@
 # Tearsheet
 
 ## Introduction
-Tearsheet is a **Model Context Protocol (MCP) server** designed to enable LLMs (such as Claude, Cursor, or GPT-based agents) to retrieve, analyze, and visualize stock prices and financial report data. It provides a set of robust tools for quantitative trading research, investment analysis, and financial education.
+Tearsheet is a **Model Context Protocol (MCP) server** that lets LLMs (Claude, Cursor, or other MCP clients) retrieve, analyze, and visualize stock prices and financial statement data from Yahoo Finance. It is built for quantitative trading research, investment analysis, and financial education.
+
+Every analysis and plot tool takes a **ticker and a date range** and fetches the data on the server, so the model never copies price arrays between tools. Financial statements are normalized on the server into standard field names, and ratios are computed there too.
 
 ## Usage Scenarios
-- **LLM-driven trading analysis**: Let LLMs fetch and analyze stock data, financial statements, and technical indicators to generate trading insights.
-- **Financial metric calculation**: Compute key ratios and metrics from income statements, balance sheets, and cash flow tables.
-- **Visualization**: Generate price charts (line or candlestick), financial metric trends, normalized comparisons, and trading signal charts.
-- **Backtesting**: Run a moving-average crossover strategy and get performance stats (total return, Sharpe ratio, max drawdown, win rate).
-- **Automated research**: Integrate with LLMs to answer questions like "What is the ROE of AAPL?", "Show me the last 6 months of MSFT price data.", or "Plot buy/sell signals for TSLA."
-
-## Features
-- Retrieve real-time and historical stock prices (single or multiple tickers)
-- Retrieve dividends and stock splits history
-- Retrieve general ticker info and fundamentals
-- Extract and analyze financial statements (income statement, balance sheet, cash flow)
-- Calculate key financial metrics (gross margin, operating margin, net profit margin, EBITDA, debt-to-equity, current ratio, quick ratio, book value per share, free cash flow, cash flow margin, ROE, ROA, P/E, P/B, dividend yield)
-- Calculate technical indicators (SMA, EMA, RSI, MACD, Bollinger Bands, volatility, ATR, Stochastic)
-- Calculate period-over-period and annualized growth rates
-- Backtest a moving-average crossover (Golden Cross / Death Cross) strategy
-- Visualize price data with line and candlestick charts
-- Plot financial metrics over time
-- Compare multiple tickers side-by-side with optional normalization
-- Plot trading signals and opportunities
-- LLM-friendly, JSON-serializable outputs
+- **LLM-driven trading analysis**: fetch prices, financial statements and technical indicators to generate trading insights.
+- **Financial metric calculation**: margins, leverage, liquidity, cash flow and valuation ratios per fiscal period.
+- **Visualization**: line and candlestick price charts, normalized comparisons, fundamental trends and crossover signal charts.
+- **Backtesting**: run a moving-average crossover strategy with realistic fills and costs, and get return, risk and trade statistics.
+- **Automated research**: answer questions like "What is the ROE of AAPL?", "How did MSFT do in the last 6 months?" or "Plot buy/sell signals for TSLA."
 
 ## Available Tools
 
 ### Data Retrieval
 | Tool | Description |
 |------|-------------|
-| `retrieve_current_price` | Current price and related info for a ticker |
-| `retrieve_stock_data` | Historical OHLCV data for one or more tickers |
-| `retrieve_financial_statements` | Annual income statement, balance sheet, or cash flow |
-| `retrieve_ticker_info` | General info and fundamentals for a ticker |
-| `retrieve_dividends` | Dividend history for a ticker |
-| `retrieve_splits` | Stock split history for a ticker |
+| `tearsheet_get_quote` | Latest price, previous close, day change, market cap and shares outstanding |
+| `tearsheet_get_price_history` | OHLCV history for 1 to 10 tickers. Returns a summary by default, rows on request |
+| `tearsheet_get_company_info` | Name, type, exchange, sector, industry, country and website |
+| `tearsheet_get_dividends` | Cash dividends per share by ex-date |
+| `tearsheet_get_splits` | Stock split history (new shares per old share) |
+| `tearsheet_get_financial_statement` | Income statement, balance sheet or cash flow, annual or quarterly, with standard field names |
 
 ### Metrics & Analysis
 | Tool | Description |
 |------|-------------|
-| `mcp_calculate_financial_metrics` | Compute a financial ratio or metric from statement data |
-| `mcp_calculate_technical_indicators` | Compute SMA, EMA, RSI, MACD, Bollinger Bands, volatility, ATR, or Stochastic |
-| `mcp_calculate_growth_rates` | Period-over-period and annualized growth rates for a time series |
-| `mcp_backtest_strategy` | Backtest a MA crossover strategy; returns total return, Sharpe ratio, max drawdown, win rate, and individual trades |
+| `tearsheet_get_fundamentals` | 17 ratios per fiscal period: margins, debt-to-equity, current/quick ratio, free cash flow, ROE, ROA, P/E, P/B, dividend yield and more |
+| `tearsheet_calculate_indicator` | SMA, EMA, RSI, MACD, annualized volatility, Bollinger Bands, ATR or Stochastic for a ticker and date range |
+| `tearsheet_calculate_growth_rates` | Period-over-period growth and CAGR for a short series of numbers you pass in |
+| `tearsheet_backtest_ma_crossover` | Long-only SMA crossover backtest: total and excess return, CAGR, volatility, Sharpe, max drawdown, trades and signal dates |
 
 ### Visualization
 | Tool | Description |
 |------|-------------|
-| `mcp_plot_price_chart` | Line or candlestick price chart from OHLCV data |
-| `mcp_plot_financial_metric` | Plot a financial metric over time |
-| `mcp_plot_comparison_chart` | Compare multiple tickers or metrics; supports normalization to a common base of 100 |
-| `mcp_plot_trading_opportunities` | Price chart overlaid with MA crossover buy/sell signals |
+| `tearsheet_plot_price_chart` | Line chart of closes, or candlesticks with a volume panel |
+| `tearsheet_plot_comparison` | 2 to 8 tickers on one chart, normalized to 100 by default |
+| `tearsheet_plot_fundamental` | One financial metric across fiscal periods as a bar chart |
+| `tearsheet_plot_ma_crossover` | Closes with both SMAs and buy/sell signal markers |
 
-> **Note:** All visualization tools automatically save charts to the `data/` directory and open them with your system's default image viewer (macOS, Linux, and Windows are supported).
+Plot tools return the image, a short text summary (file path, date range, last close, return or signal dates) and structured data. Charts are saved under the data directory with names chosen by the server. They are not opened in an image viewer unless you turn that on (see [Configuration](#configuration)).
+
+### Conventions
+- Ratios, margins, returns and growth rates are **fractions**: `0.25` means 25%.
+- Dates are `YYYY-MM-DD`. `end_date` is **inclusive** and defaults to today.
+- Price history and indicators return a **summary** by default. Pass `response_format="rows"` for individual bars, capped at `max_rows` (default 100, max 1000). Longer series are evenly downsampled and flagged `truncated`.
+- Prices are adjusted for splits and dividends by default.
+- Intraday limits are checked up front: `1m` covers at most 7 days within the last 30, `5m`/`15m`/`30m` the last 60 days, `1h` the last 730 days.
+- Errors come back as MCP errors (`isError: true`) that say what to change, e.g. a ticker typo (`BRK.B` suggests `BRK-B`) or a date range that is too short.
+
+### Backtest assumptions
+`tearsheet_backtest_ma_crossover` uses daily bars and:
+- detects a crossover at the **close** of bar t (short SMA above the long SMA after being at or below it the day before; the reverse for a sell),
+- **fills at the open of bar t+1**, never at the signal bar's close. A signal on the last bar is not filled,
+- is long-only, fully invested or flat,
+- charges `cost_bps` (default 5) on every entry and exit, with no other slippage model,
+- marks the position to market every day, so max drawdown includes dips during open trades,
+- annualizes volatility and Sharpe with 252 trading days. Sharpe uses `risk_free_rate` (default 0),
+- counts completed round trips in `num_trades`. A position still open at the end is listed with `open_at_end: true`.
 
 ## Installation
 1. **Clone the repository**
@@ -61,15 +66,15 @@ Tearsheet is a **Model Context Protocol (MCP) server** designed to enable LLMs (
    git clone https://github.com/Nishaant-Soni/Tearsheet.git
    cd Tearsheet
    ```
-2. **Install dependencies** (requires [uv](https://github.com/astral-sh/uv))
+2. **Install dependencies** (requires [uv](https://github.com/astral-sh/uv) and Python 3.12+)
    ```bash
    uv sync
    ```
 
 ## How to Run
-1. **Configure your LLM client (Claude, Cursor, etc.)** to connect to the MCP server and call the available tools.
+1. **Configure your LLM client (Claude, Cursor, etc.)** to connect to the MCP server.
 
-    Go to Claude settings → Developer → Edit Config and add a new MCP server entry:
+    In Claude Desktop, go to Settings → Developer → Edit Config and add a new MCP server entry:
     ```json
     {
       "mcpServers": {
@@ -85,7 +90,7 @@ Tearsheet is a **Model Context Protocol (MCP) server** designed to enable LLMs (
       }
     }
     ```
-    `tearsheet` should now be listed in your Claude tools.
+    Restart Claude Desktop. The `tearsheet_*` tools should now be listed in your Claude tools.
 
 2. **Start talking with your trading assistant!**
 
@@ -93,9 +98,44 @@ Tearsheet is a **Model Context Protocol (MCP) server** designed to enable LLMs (
 
     - Compare the stock prices of Nvidia and AMD in the past month.
     - How's Tesla stock looking in the past 3 months?
-    - Plot the trading opportunities of Microsoft in the past 3 months.
+    - Plot the moving-average crossover signals for Microsoft over the past 3 months.
     - What is the ROE and P/E ratio of Apple?
     - Show me the dividend history of Coca-Cola.
-    - Backtest a moving-average crossover strategy on TSLA for the past year.
+    - Backtest a 20/50-day moving-average crossover strategy on TSLA for the past year.
     - Plot a candlestick chart for NVDA over the last 30 days.
     - Compare AAPL, MSFT, and GOOGL returns over the past 6 months on a normalized chart.
+    - Plot Microsoft's free cash flow over the last four fiscal years.
+
+3. **Inspect the server directly** (optional) with the MCP Inspector:
+    ```bash
+    npx @modelcontextprotocol/inspector uv run main.py
+    ```
+
+## Configuration
+| Environment variable | Default | Effect |
+|---|---|---|
+| `TEARSHEET_DATA_DIR` | the repo's `data/` folder | Where chart PNGs are saved |
+| `TEARSHEET_OPEN_CHARTS` | unset (off) | Set to `1` to open each new chart in the system image viewer |
+
+In Claude Desktop, set these with an `"env": {...}` block next to `"command"` in the server entry.
+
+## Development
+```bash
+uv run pytest              # offline test suite (yfinance is faked, network access is refused)
+uv run pytest -m live      # optional checks against live Yahoo Finance data
+uv run ruff check .        # lint
+uv run ruff format .       # format
+```
+
+Project layout:
+```
+main.py, server.py          entry point and the shared MCP server
+tearsheet/data/             the only code that calls yfinance (async, cached)
+tearsheet/analysis/         pure functions: indicators, growth, backtest, ratios
+tearsheet/viz/              chart rendering (PNG bytes) and chart file storage
+tearsheet/tools/            thin MCP tool wrappers
+tests/                      offline tests and optional live tests
+evals/, evaluation.xml      before/after evaluation of the tool surface
+```
+
+See [CHANGES.md](CHANGES.md) for the mapping from the old tool names, behavior changes and fixed calculation bugs, and [evals/EVAL_RESULTS.md](evals/EVAL_RESULTS.md) for the evaluation results.

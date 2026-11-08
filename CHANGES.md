@@ -1,9 +1,13 @@
 # Changes
 
 Tracks the refactor described in the refactor spec: tool renames, behavior changes,
-and deviations from the spec.
+deviations from the spec, regression coverage and the evaluation result.
 
 ## Tool renames
+
+The old tool names are removed, not aliased. Clients and prompts that call them need
+the new names. The `filename`, `prices`, `price_data`, `series`, `dates` and
+`financial_data` parameters are gone: tools take a ticker and dates instead.
 
 | Old tool | New tool | Since |
 |---|---|---|
@@ -116,8 +120,8 @@ name), `fcf_margin`. `tearsheet_get_fundamentals` computes all 17 metrics by def
   tests use `@pytest.mark.anyio` and no extra dependency is added.
 - **Agg backend set in Phase 0.** mcp 2.x runs sync tools in worker threads, and the
   macOS GUI backend aborts the process when pyplot creates a figure off the main thread.
-  `tearsheet/viz/charts.py` forces `Agg` now rather than waiting for Phase 4. PNG output
-  is unchanged.
+  `tearsheet/viz/charts.py` forced `Agg` in Phase 0, ahead of the Phase 4 rewrite to
+  the object API. PNG output was unchanged.
 - **Backtest trades include `signal_date`.** With next-open fills, `entry_date` is the
   day after the crossover. Eval Q4 asks for the crossover (signal) date, so each trade
   in `tearsheet_backtest_ma_crossover` also reports `signal_date` and `exit_signal_date`.
@@ -126,9 +130,10 @@ name), `fcf_margin`. `tearsheet_get_fundamentals` computes all 17 metrics by def
 - **yfinance upgraded to 1.8.0** (from 0.2.61). It stamps dividends and splits at
   market open (09:30) rather than midnight, so the data layer normalizes them to dates.
   All ten eval answers were re-verified as unchanged under 1.8.0.
-- **Retrieval tools renamed in Phase 1, not Phase 5.** The new data layer replaces
+- **Retrieval tools renamed in Phase 1, not Phase 5.** The new data layer replaced
   their bodies, so they got their final names, typed inputs, annotations and
-  structured output at the same time. Analysis and plot tools follow in Phases 3 to 5.
+  structured output at the same time. Analysis and plot tools followed in Phases 3
+  and 4.
 - **`adjusted=false` is split-adjusted.** yfinance's unadjusted close still reflects
   later splits; only dividend adjustment is removed.
 - **Summary is included in `rows` mode too**, so callers always get the headline numbers.
@@ -201,3 +206,22 @@ P4/P5 scenarios were re-run against commit `41f093a` to confirm the old behavior
 
 Tests run offline: yfinance is replaced by a fake and outbound sockets are refused.
 `uv run pytest -m live` runs four optional checks against Yahoo Finance.
+
+## Evaluation
+
+Ten questions in `evaluation.xml` (answers verified independently by
+`evals/ground_truth.py`) were run in Claude Desktop with Claude Opus 5.5 (medium
+reasoning, code execution on) against the old and new tool surfaces. Full results are
+in `evals/EVAL_RESULTS.md`.
+
+| Measure | Before | After |
+|---|---|---|
+| Accuracy | 10/10 | 10/10 |
+| Median tool calls | 2 | 2 |
+| Total tool calls | 18 | 17 |
+
+Accuracy was already 10/10 on the old surface, and call counts barely changed. The
+difference is where the computation happens: on the old surface Claude computed
+moving averages in `bash_tool` (2 of 18 calls) and worked out ratios from raw
+statements to avoid the buggy metric tools. On the new surface every figure came from
+a Tearsheet tool, with no `bash_tool` use.
