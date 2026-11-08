@@ -1,7 +1,7 @@
 """Before/after summary for evals/EVAL_RESULTS.md.
 
 Reads the Baseline and After tables, checks them for gaps and for answers that do
-not match the expected value, and prints accuracy, tool-call and token statistics
+not match the expected value, and prints accuracy and tool-call statistics
 for both runs side by side. Numbers are reported exactly as recorded.
 
 Usage (from the repo root):
@@ -27,7 +27,6 @@ class Row:
     answer: str
     correct: bool | None
     tool_calls: int | None
-    tokens: int | None
 
 
 def parse_table(text: str, heading: str) -> list[Row]:
@@ -37,7 +36,7 @@ def parse_table(text: str, heading: str) -> list[Row]:
     rows = []
     for line in lines:
         cells = [c.strip() for c in line.strip().strip("|").split("|")]
-        if len(cells) < 6 or not cells[0].isdigit():
+        if len(cells) < 5 or not cells[0].isdigit():
             continue
         correct = {"yes": True, "y": True, "no": False, "n": False}.get(
             cells[3].lower()
@@ -49,9 +48,6 @@ def parse_table(text: str, heading: str) -> list[Row]:
                 answer=cells[2],
                 correct=correct,
                 tool_calls=int(cells[4]) if cells[4].isdigit() else None,
-                tokens=int(cells[5].replace(",", ""))
-                if cells[5].replace(",", "").isdigit()
-                else None,
             )
         )
     return rows
@@ -80,13 +76,11 @@ def check(rows: list[Row], label: str) -> list[str]:
 
 def stats(rows: list[Row]) -> dict:
     calls = [r.tool_calls for r in rows if r.tool_calls is not None]
-    tokens = [r.tokens for r in rows if r.tokens is not None]
     return {
         "accuracy": f"{sum(bool(r.correct) for r in rows)}/{len(rows)}",
         "median_calls": statistics.median(calls) if calls else None,
         "total_calls": sum(calls),
         "range_calls": f"{min(calls)} to {max(calls)}" if calls else "n/a",
-        "median_tokens": statistics.median(tokens) if tokens else None,
     }
 
 
@@ -105,7 +99,6 @@ def summary(before: list[Row], after: list[Row]) -> str:
         f"| Median tool calls | {fmt(b['median_calls'])} | {fmt(a['median_calls'])} |",
         f"| Total tool calls | {b['total_calls']} | {a['total_calls']} |",
         f"| Tool calls range | {b['range_calls']} | {a['range_calls']} |",
-        f"| Median tokens | {fmt(b['median_tokens'])} | {fmt(a['median_tokens'])} |",
         "",
         "Per question (tool calls before -> after, correctness):",
         "",
