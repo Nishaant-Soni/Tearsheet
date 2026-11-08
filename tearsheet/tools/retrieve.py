@@ -1,9 +1,9 @@
 from server import mcp
-from utils.retrieve_data import (
+from tearsheet.data.fundamentals import get_financial_statements
+from tearsheet.data.market import (
     fetch_stock_data,
     get_current_price,
     get_dividends,
-    get_financial_statements,
     get_splits,
     get_ticker_info,
 )

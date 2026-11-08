@@ -1,4 +1,4 @@
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 
 # This is the shared MCP server instance
-mcp = FastMCP("tearsheet")
+mcp = MCPServer("tearsheet")

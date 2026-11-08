@@ -3,14 +3,19 @@ import platform
 import subprocess
 from io import BytesIO
 
-import matplotlib.dates as mdates
-import matplotlib.pyplot as plt
+import matplotlib
+
+# mcp 2.x runs sync tools in worker threads; GUI backends crash off the main thread.
+matplotlib.use("Agg")
+
+import matplotlib.dates as mdates  # noqa: E402
+import matplotlib.pyplot as plt  # noqa: E402
 import pandas as pd
-from mcp.server.fastmcp import Image
+from mcp.server.mcpserver import Image
 
-from utils.calculate_metrics import calculate_trading_opportunities
+from tearsheet.analysis.backtest import calculate_trading_opportunities
 
-_DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data")
+_DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "data")
 os.makedirs(_DATA_DIR, exist_ok=True)
 
 

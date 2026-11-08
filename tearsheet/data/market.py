@@ -1,7 +1,6 @@
 import yfinance as yf
 
 
-# market data tools
 def get_current_price(ticker: str) -> dict:
     """
     Fetches the latest price for the given ticker.
@@ -83,22 +82,3 @@ def get_ticker_info(ticker: str) -> dict:
         "industry": info.get("industry", ""),
         "currency": info.get("currency", "USD"),
     }
-
-
-# financial statements extraction tools
-def get_financial_statements(ticker: str, indicator: str) -> str:
-    """
-    Fetches the annual income statements, balance sheet, and cash flow for the given ticker.
-    """
-    stock = yf.Ticker(ticker)
-    if indicator == "income_statement":
-        statements = stock.financials
-        return {"income_statement": statements.to_json()}
-    elif indicator == "balance_sheet":
-        statements = stock.balance_sheet
-        return {"balance_sheet": statements.to_json()}
-    elif indicator == "cash_flow":
-        statements = stock.cashflow
-        return {"cash_flow": statements.to_json()}
-    else:
-        return {"error": f"Invalid indicator: {indicator}"}

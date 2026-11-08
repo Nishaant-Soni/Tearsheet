@@ -1,10 +1,8 @@
 from server import mcp
-from utils.calculate_metrics import (
-    backtest_strategy,
-    calculate_financial_metric,
-    calculate_growth_rates,
-    calculate_technical_indicators,
-)
+from tearsheet.analysis.backtest import backtest_strategy
+from tearsheet.analysis.growth import calculate_growth_rates
+from tearsheet.analysis.indicators import calculate_technical_indicators
+from tearsheet.analysis.ratios import calculate_financial_metric
 
 
 @mcp.tool()

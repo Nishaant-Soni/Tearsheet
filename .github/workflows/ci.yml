@@ -34,3 +34,6 @@ jobs:
 
       - name: Import smoke test
         run: uv run python -c "import main; print('All imports OK')"
+
+      - name: Test (pytest)
+        run: uv run pytest

@@ -1,7 +1,7 @@
-from mcp.server.fastmcp import Image
+from mcp.server.mcpserver import Image
 
 from server import mcp
-from utils.visualization import (
+from tearsheet.viz.charts import (
     plot_comparison_chart,
     plot_financial_metric,
     plot_price_chart,
