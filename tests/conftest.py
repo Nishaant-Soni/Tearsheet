@@ -1,5 +1,7 @@
 """Shared fixtures. No test may reach the network: yfinance is replaced by fakes."""
 
+import socket
+import threading
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 
@@ -100,7 +102,9 @@ class FakeTicker:
         self.ticker = symbol
 
     def history(self, **kwargs) -> pd.DataFrame:
-        self._yahoo.history_calls.append({"ticker": self.ticker, **kwargs})
+        self._yahoo.history_calls.append(
+            {"ticker": self.ticker, "thread": threading.current_thread().name, **kwargs}
+        )
         if self._sym is None or self._sym.history is None:
             return pd.DataFrame()
         df = self._sym.history
@@ -138,6 +142,19 @@ class FakeTicker:
 
 
 @pytest.fixture(autouse=True)
+def no_network(monkeypatch, request):
+    """Fail any outbound connection outside tests marked `live`."""
+    if request.node.get_closest_marker("live") is None:
+
+        def refuse(*args, **kwargs):
+            raise RuntimeError("network access in an offline test")
+
+        monkeypatch.setattr(socket.socket, "connect", refuse)
+        monkeypatch.setattr(socket.socket, "connect_ex", refuse)
+        monkeypatch.setattr(socket, "create_connection", refuse)
+
+
+@pytest.fixture(autouse=True)
 def chart_dir(monkeypatch, tmp_path):
     """Charts go to a temp dir, and the image viewer stays off, in every test."""
     path = tmp_path / "charts"
@@ -147,11 +164,15 @@ def chart_dir(monkeypatch, tmp_path):
 
 
 @pytest.fixture(autouse=True)
-def fake_yahoo(monkeypatch) -> Iterator[FakeYahoo]:
-    """Replace yfinance for every test and start each test with empty caches."""
+def fake_yahoo(monkeypatch, request) -> Iterator[FakeYahoo]:
+    """Replace yfinance for every test and start each test with empty caches.
+
+    Tests marked `live` keep the real yfinance (run them with `pytest -m live`).
+    """
     yahoo = FakeYahoo()
-    monkeypatch.setattr("yfinance.Ticker", yahoo.ticker)
-    monkeypatch.setattr("yfinance.Search", yahoo.search)
+    if request.node.get_closest_marker("live") is None:
+        monkeypatch.setattr("yfinance.Ticker", yahoo.ticker)
+        monkeypatch.setattr("yfinance.Search", yahoo.search)
     market.clear_caches()
     fundamentals.clear_caches()
     yield yahoo

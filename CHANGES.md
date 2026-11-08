@@ -169,3 +169,35 @@ name), `fcf_margin`. `tearsheet_get_fundamentals` computes all 17 metrics by def
   spec's layout. `viz/charts.py` stays pure.
 - **`tearsheet/serialize.py` added** (not in the spec's layout) for NaN/inf to `None`,
   rounding, summaries and row downsampling, shared by all tool wrappers.
+
+## Regression coverage
+
+Each problem from the refactor spec has a test that fails on the original code. The
+P4/P5 scenarios were re-run against commit `41f093a` to confirm the old behavior.
+
+| Problem | Old behavior | Test |
+|---|---|---|
+| FCF sign | OCF 500, capex -100 gave 600 | `test_ratios.py::test_fcf_subtracts_absolute_capex` |
+| D/E definition | total liabilities / equity (1.5 instead of 0.4) | `test_ratios.py::test_debt_to_equity_uses_total_debt_not_liabilities` |
+| Volatility | daily std labelled annualized | `test_indicators.py::test_volatility_is_annualized_daily_std` |
+| MACD | fixed 12/26/9, `window` silently ignored | `test_indicators.py::test_macd_uses_fast_slow_signal`, `test_macd_ignores_window` |
+| Growth | complex number across sign changes | `test_growth.py::test_sign_change_cagr_is_none_with_note` |
+| Backtest drawdown | only at trade exits (-14.5% for a -21.6% dip) | `test_backtest.py::test_intra_trade_drawdown_is_captured` |
+| Backtest fills | signal bar close (look-ahead) | `test_backtest.py::test_fill_is_next_open_not_signal_close` |
+| Backtest costs | none | `test_backtest.py::test_cost_bps_changes_total_return_by_expected_amount` |
+| Backtest Sharpe | per-trade mean/std, not annualized | `test_backtest.py::test_sharpe_and_volatility_formulas`, `test_flat_series_sharpe_is_none` |
+| Path traversal | `os.path.join(data, filename)` accepted `../../x.png` | `test_plot_paths.py::test_crafted_ticker_cannot_escape_data_dir`, `test_tool_schemas.py::test_no_filenames_or_price_arrays` |
+| Image viewer | opened on every plot | `test_plot_tools.py` (`no_subprocess` fixture), `test_plot_paths.py::test_viewer_only_opens_when_enabled` |
+| Overwritten charts | fixed default names | `test_plot_paths.py::test_same_second_does_not_overwrite` |
+| pyplot state | `plt.scatter` mixed with `ax.*` | `test_charts.py::test_charts_never_use_pyplot_figures` |
+| `eval` | `custom_formula_evaluator` | `test_hygiene.py::test_no_eval_or_exec_in_source` |
+| Model as data pipe (P1) | tools took price arrays | `test_tool_schemas.py::test_no_filenames_or_price_arrays` |
+| Fundamentals pipeline (P2) | no label mapping, no market block | `test_fundamentals_mapping.py`, `test_fundamentals_tools.py` |
+| Return types (P3) | JSON strings in dicts | `test_market.py::test_dividends_are_dated_records`, `test_retrieve_tools.py` |
+| Errors (P6) | `{"error": ...}` or `{}` as success | `test_tool_schemas.py::test_bad_ticker_is_error` |
+| Payload size (P6) | unbounded rows | `test_serialize.py::test_rows_truncated_flag_and_nan`, `test_retrieve_tools.py::test_price_history_rows_truncated` |
+| Blocking calls (P6) | sync tools on the event loop | `test_hygiene.py::test_yfinance_calls_run_off_the_event_loop`, `test_chart_rendering_runs_off_the_event_loop` |
+| Slow quote (P6) | `.info` for the currency | `test_market.py::test_quote_uses_fast_info_not_info` |
+
+Tests run offline: yfinance is replaced by a fake and outbound sockets are refused.
+`uv run pytest -m live` runs four optional checks against Yahoo Finance.

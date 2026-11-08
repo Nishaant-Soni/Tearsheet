@@ -47,12 +47,10 @@ def test_crossover_chart_returns_png(df):
 def test_charts_never_use_pyplot_figures(df, monkeypatch):
     import matplotlib.pyplot as plt
 
-    monkeypatch.setattr(
-        plt, "figure", lambda *a, **k: pytest.fail("pyplot.figure used")
-    )
-    monkeypatch.setattr(
-        plt, "subplots", lambda *a, **k: pytest.fail("pyplot.subplots used")
-    )
+    for name in ("figure", "subplots", "scatter", "plot", "savefig", "gcf", "gca"):
+        monkeypatch.setattr(
+            plt, name, lambda *a, _n=name, **k: pytest.fail(f"pyplot.{_n} used")
+        )
     charts.price_chart(df, "AAPL", "line", None)
     charts.price_chart(df, "AAPL", "candlestick", None)
     charts.ma_crossover_chart(df, "AAPL", 5, 20, None)
