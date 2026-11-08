@@ -198,3 +198,79 @@ class SplitsResult(BaseModel):
     splits: list[DatedValue] = Field(
         description="Split ratio (new shares per old share) by date, oldest first."
     )
+
+
+# ------------------------------------------------------------ fundamentals
+
+Statement = Literal["income_statement", "balance_sheet", "cash_flow"]
+Period = Literal["annual", "quarterly"]
+FundamentalMetric = Literal[
+    "gross_margin",
+    "operating_margin",
+    "net_margin",
+    "ebitda",
+    "debt_to_equity",
+    "liabilities_to_equity",
+    "current_ratio",
+    "quick_ratio",
+    "free_cash_flow",
+    "fcf_margin",
+    "operating_cash_flow_margin",
+    "roe",
+    "roa",
+    "book_value_per_share",
+    "pe_ratio",
+    "pb_ratio",
+    "dividend_yield",
+]
+
+
+class FiscalPeriod(BaseModel):
+    period_end: str
+    fields: dict[str, float | None] = Field(
+        description="Canonical field -> value in the reporting currency (EPS per "
+        "share, share counts in shares). null when not reported."
+    )
+
+
+class FinancialStatementResult(BaseModel):
+    ticker: str
+    statement: str
+    period: str
+    currency: str | None = Field(description="Reporting currency of the statement.")
+    fiscal_periods: list[FiscalPeriod] = Field(description="Newest first.")
+    missing_fields: list[str] = Field(
+        description="Canonical fields with no matching label in any period."
+    )
+    unmapped_labels: list[str] = Field(
+        description="yfinance labels not mapped to a canonical field."
+    )
+    notes: list[str]
+
+
+class AsOfPrice(BaseModel):
+    price: float | None
+    currency: str | None
+    fetched_at: str
+    applies_to_period_end: str | None = Field(
+        description="Market-based ratios are computed for this (latest) period only."
+    )
+
+
+class FundamentalsPeriod(BaseModel):
+    period_end: str
+    metrics: dict[str, float | None]
+
+
+class FundamentalsResult(BaseModel):
+    ticker: str
+    currency: str | None = Field(description="Reporting currency of the statements.")
+    period: str
+    as_of_price: AsOfPrice | None = Field(
+        description="Present when pe_ratio, pb_ratio or dividend_yield was requested."
+    )
+    periods: list[FundamentalsPeriod] = Field(description="Newest first.")
+    inputs_used: dict[str, dict[str, float | None]] = Field(
+        description="period_end -> canonical inputs the requested metrics read."
+    )
+    notes: list[str]

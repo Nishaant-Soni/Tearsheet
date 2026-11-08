@@ -1,8 +1,33 @@
-from server import mcp
+from datetime import date, timedelta
+from functools import partial
+from typing import Annotated
+
+from pydantic import Field
+
+from server import READ_ONLY_REMOTE, mcp
 from tearsheet.analysis.backtest import backtest_strategy
 from tearsheet.analysis.growth import calculate_growth_rates
 from tearsheet.analysis.indicators import calculate_technical_indicators
-from tearsheet.analysis.ratios import calculate_financial_metric
+from tearsheet.analysis.ratios import (
+    ALL_METRICS,
+    CURRENCY_METRICS,
+    MARKET_METRICS,
+    METRIC_FIELDS,
+    MarketInputs,
+    compute_fundamentals,
+    ttm_eps,
+)
+from tearsheet.data import fundamentals, market
+from tearsheet.data.fundamentals import FIELD_STATEMENT, LABELS
+from tearsheet.models import (
+    AsOfPrice,
+    FundamentalMetric,
+    FundamentalsPeriod,
+    FundamentalsResult,
+    Period,
+    Ticker,
+)
+from tearsheet.serialize import RATIO_DP, num
 
 
 @mcp.tool()
@@ -69,30 +94,102 @@ def mcp_backtest_strategy(
     return backtest_strategy(prices, short_window, long_window)
 
 
-@mcp.tool()
-def mcp_calculate_financial_metrics(financial_data: dict, indicator: str) -> dict:
+@mcp.tool(name="tearsheet_get_fundamentals", annotations=READ_ONLY_REMOTE)
+async def get_fundamentals(
+    ticker: Ticker,
+    period: Period = "annual",
+    metrics: Annotated[
+        list[FundamentalMetric] | None,
+        Field(description="Metrics to compute. Omit for all of them."),
+    ] = None,
+) -> FundamentalsResult:
+    """Compute financial ratios per fiscal period from normalized statements.
+
+    Use for margins, leverage, liquidity, cash flow and valuation ratios. For raw
+    statement line items use tearsheet_get_financial_statement.
+
+    Ratios are fractions (0.25 = 25%). ebitda and free_cash_flow are amounts in the
+    reporting currency. Definitions: debt_to_equity = total_debt / equity;
+    liabilities_to_equity = total_liabilities / equity; free_cash_flow =
+    operating_cash_flow - |capex|; roe and roa use period-end equity and assets.
+    Quarterly periods give per-quarter (not annualized) margins and returns.
+
+    pe_ratio, pb_ratio and dividend_yield use the current price (as_of_price) and
+    fill only the latest period. pe_ratio uses latest annual diluted EPS (TTM for
+    quarterly) and is null when EPS <= 0. dividend_yield = trailing 12 months of
+    dividends / price. inputs_used lists the inputs per period; notes explain
+    fallbacks and nulls.
+
+    Example: {"ticker": "AAPL", "metrics": ["gross_margin", "debt_to_equity"]}
     """
-    Calculates financial metrics from the provided data. The metrics are:
-    - gross_margin (need retrieve income_statement)
-    - operating_margin (need retrieve income_statement)
-    - net_profit_margin (need retrieve income_statement)
-    - ebitda (need retrieve income_statement)
-    - debt_to_equity (need retrieve balance_sheet)
-    - current_ratio (need retrieve balance_sheet)
-    - quick_ratio (need retrieve balance_sheet)
-    - book_value_per_share (need retrieve balance_sheet)
-    - free_cash_flow (need retrieve cash_flow)
-    - cash_flow_margin (need retrieve cash_flow)
-    - roe (need retrieve income_statement and balance_sheet)
-    - roa (need retrieve income_statement and balance_sheet)
-    - pe_ratio (need retrieve income_statement and market)
-    - pb_ratio (need retrieve income_statement and market)
-    - dividend_yield (need retrieve income_statement and market)
-    Args:
-        financial_data: Dict with financial data.
-        indicator: str, one of the supported metric names
-        window: int, window size for the indicator
-    Returns:
-        Dict with financial metrics name as key and value as value. e.g. {'gross_margin': 0.5}
-    """
-    return calculate_financial_metric(financial_data, indicator)
+    wanted = list(dict.fromkeys(metrics or ALL_METRICS))
+    statements = sorted(
+        {FIELD_STATEMENT[f] for m in wanted for f in METRIC_FIELDS[m]},
+        key=list(LABELS).index,
+    )
+    market_wanted = [m for m in wanted if m in MARKET_METRICS]
+
+    periods, currency = [], None
+    if statements:
+        (periods, notes), currency = await market.gather(
+            partial(fundamentals.get_merged_fields, ticker, period, statements),
+            partial(fundamentals.get_financial_currency, ticker),
+        )
+    else:
+        notes = []
+
+    as_of, inputs = None, None
+    if market_wanted:
+        quote, dividends = await market.gather(
+            partial(market.get_quote, ticker),
+            partial(market.get_dividends, ticker, date.today() - timedelta(days=365)),
+        )
+        eps, eps_note = ttm_eps(periods, period)
+        mismatch = None
+        if currency and quote.currency and currency != quote.currency:
+            mismatch = (
+                f"pe_ratio and pb_ratio: statements are in {currency} but the price "
+                f"is in {quote.currency}, so they are not computed."
+            )
+        inputs = MarketInputs(
+            price=quote.last_price,
+            eps=eps,
+            eps_note=eps_note,
+            ttm_dividends=sum(d.value for d in dividends),
+            currency_mismatch=mismatch,
+        )
+        if not periods:
+            periods = [(date.today().isoformat(), {})]
+        as_of = AsOfPrice(
+            price=quote.last_price,
+            currency=quote.currency,
+            fetched_at=quote.fetched_at,
+            applies_to_period_end=periods[0][0],
+        )
+
+    table = compute_fundamentals(periods, wanted, inputs)
+    rows = [
+        FundamentalsPeriod(
+            period_end=end,
+            metrics={
+                m: num(v, 0 if m in CURRENCY_METRICS else RATIO_DP)
+                for m, v in values.items()
+            },
+        )
+        for end, values in table.periods
+        if any(v is not None for v in values.values())
+    ]
+    kept = {r.period_end for r in rows}
+    return FundamentalsResult(
+        ticker=ticker,
+        currency=currency,
+        period=period,
+        as_of_price=as_of,
+        periods=rows,
+        inputs_used={
+            end: {k: num(v) for k, v in used.items()}
+            for end, used in table.inputs_used.items()
+            if end in kept
+        },
+        notes=[*notes, *table.notes],
+    )

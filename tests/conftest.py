@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from tearsheet.data import market
+from tearsheet.data import fundamentals, market
 
 EXCHANGE_TZ = "America/New_York"
 
@@ -43,6 +43,26 @@ def make_actions(pairs, tz: str = EXCHANGE_TZ) -> pd.Series:
     return pd.Series([v for _, v in pairs], index=idx, dtype=float)
 
 
+def make_statement(rows: dict[str, list], period_ends: list[str]) -> pd.DataFrame:
+    """A yfinance-style statement: row labels x Timestamp period-end columns."""
+    cols = [pd.Timestamp(d) for d in period_ends]
+    return pd.DataFrame(
+        {c: [vals[i] for vals in rows.values()] for i, c in enumerate(cols)},
+        index=list(rows),
+        dtype=float,
+    )
+
+
+STATEMENT_ATTRS = {
+    "financials",
+    "balance_sheet",
+    "cashflow",
+    "quarterly_financials",
+    "quarterly_balance_sheet",
+    "quarterly_cashflow",
+}
+
+
 @dataclass
 class FakeSymbol:
     history: pd.DataFrame | None = None
@@ -50,6 +70,7 @@ class FakeSymbol:
     info: dict | None = None
     dividends: pd.Series = field(default_factory=lambda: pd.Series(dtype=float))
     splits: pd.Series = field(default_factory=lambda: pd.Series(dtype=float))
+    statements: dict[str, pd.DataFrame] = field(default_factory=dict)
 
 
 class FakeYahoo:
@@ -108,6 +129,13 @@ class FakeTicker:
     def splits(self) -> pd.Series:
         return pd.Series(dtype=float) if self._sym is None else self._sym.splits
 
+    def __getattr__(self, name: str):
+        if name in STATEMENT_ATTRS:
+            if self._sym is None:
+                return pd.DataFrame()
+            return self._sym.statements.get(name, pd.DataFrame())
+        raise AttributeError(name)
+
 
 @pytest.fixture(autouse=True)
 def fake_yahoo(monkeypatch) -> Iterator[FakeYahoo]:
@@ -116,8 +144,10 @@ def fake_yahoo(monkeypatch) -> Iterator[FakeYahoo]:
     monkeypatch.setattr("yfinance.Ticker", yahoo.ticker)
     monkeypatch.setattr("yfinance.Search", yahoo.search)
     market.clear_caches()
+    fundamentals.clear_caches()
     yield yahoo
     market.clear_caches()
+    fundamentals.clear_caches()
 
 
 @pytest.fixture
@@ -137,4 +167,69 @@ def aapl(fake_yahoo: FakeYahoo) -> FakeSymbol:
         info={"longName": "Apple Inc.", "quoteType": "EQUITY", "sector": "Technology"},
         dividends=make_actions([("2023-11-10", 0.24), ("2024-02-09", 0.24)]),
         splits=make_actions([("2014-06-09", 7.0), ("2020-08-31", 4.0)]),
+    )
+
+
+ANNUAL_ENDS = ["2025-06-30", "2024-06-30"]
+QUARTER_ENDS = ["2025-06-30", "2025-03-31", "2024-12-31", "2024-09-30"]
+
+
+@pytest.fixture
+def acme(fake_yahoo: FakeYahoo) -> FakeSymbol:
+    """A company with annual and quarterly statements using yfinance labels."""
+    income = {
+        "Total Revenue": [1000.0, 800.0],
+        "Cost Of Revenue": [400.0, 360.0],
+        "Gross Profit": [600.0, 440.0],
+        "Operating Income": [300.0, 200.0],
+        "Net Income": [200.0, 120.0],
+        "EBITDA": [350.0, 240.0],
+        "Diluted EPS": [2.0, 1.2],
+        "Diluted Average Shares": [100.0, 100.0],
+        "Tax Rate For Calcs": [0.21, 0.21],  # not mapped
+    }
+    balance = {
+        "Total Assets": [5000.0, 4000.0],
+        "Total Liabilities Net Minority Interest": [3000.0, 2500.0],
+        "Stockholders Equity": [2000.0, 1500.0],
+        "Current Assets": [1500.0, 1200.0],
+        "Current Liabilities": [1000.0, 1000.0],
+        "Inventory": [300.0, 200.0],
+        "Total Debt": [800.0, 900.0],
+        "Cash And Cash Equivalents": [400.0, 300.0],
+        "Ordinary Shares Number": [100.0, 100.0],
+        "Goodwill": [50.0, 50.0],  # not mapped
+    }
+    cash = {
+        "Operating Cash Flow": [500.0, 350.0],
+        "Capital Expenditure": [-100.0, -50.0],
+        "Free Cash Flow": [400.0, 300.0],
+        "Cash Dividends Paid": [-80.0, -70.0],
+        "Depreciation And Amortization": [50.0, 40.0],
+    }
+    q_income = {
+        "Total Revenue": [260.0, 250.0, 250.0, 240.0],
+        "Net Income": [52.0, 50.0, 50.0, 48.0],
+        "Diluted EPS": [0.5, 0.5, 0.5, 0.5],
+    }
+    q_balance = {
+        "Total Assets": [5000.0, 4900.0, 4800.0, 4700.0],
+        "Stockholders Equity": [2000.0, 1900.0, 1800.0, 1700.0],
+        "Total Debt": [800.0, 820.0, 840.0, 860.0],
+    }
+    return fake_yahoo.add(
+        "ACME",
+        fast_info={"lastPrice": 40.0, "previousClose": 39.0, "currency": "USD"},
+        info={
+            "longName": "Acme Corp",
+            "quoteType": "EQUITY",
+            "financialCurrency": "USD",
+        },
+        statements={
+            "financials": make_statement(income, ANNUAL_ENDS),
+            "balance_sheet": make_statement(balance, ANNUAL_ENDS),
+            "cashflow": make_statement(cash, ANNUAL_ENDS),
+            "quarterly_financials": make_statement(q_income, QUARTER_ENDS),
+            "quarterly_balance_sheet": make_statement(q_balance, QUARTER_ENDS),
+        },
     )

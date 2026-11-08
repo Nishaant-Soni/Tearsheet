@@ -1,24 +1,24 @@
 from datetime import date
-
-import anyio
-import pandas as pd
-from mcp.server.mcpserver.exceptions import ToolError
+from functools import partial
 
 from server import READ_ONLY_REMOTE, mcp
-from tearsheet.data import market
-from tearsheet.data.fundamentals import get_financial_statements
+from tearsheet.data import fundamentals, market
 from tearsheet.models import (
     INTRADAY_INTERVALS,
     CompanyInfo,
     DividendsResult,
     EndDate,
+    FinancialStatementResult,
+    FiscalPeriod,
     Interval,
     MaxRows,
+    Period,
     PriceHistoryResult,
     Quote,
     ResponseFormat,
     SplitsResult,
     StartDate,
+    Statement,
     Ticker,
     TickerHistory,
     Tickers,
@@ -71,26 +71,16 @@ async def get_price_history(
     """
     rng = resolve_range(start_date, end_date, interval)
     intraday = interval in INTRADAY_INTERVALS
-    frames: dict[str, pd.DataFrame] = {}
-    errors: list[str] = []
-
-    async def fetch(t: str) -> None:
-        try:
-            frames[t] = await market.get_history(
-                t, rng.start, rng.end, interval, adjusted
-            )
-        except ToolError as e:
-            errors.append(str(e))
-
-    async with anyio.create_task_group() as tg:
-        for t in dict.fromkeys(tickers):
-            tg.start_soon(fetch, t)
-    if errors:
-        raise ToolError(" ".join(errors))
+    unique = list(dict.fromkeys(tickers))
+    frames = await market.gather(
+        *(
+            partial(market.get_history, t, rng.start, rng.end, interval, adjusted)
+            for t in unique
+        )
+    )
 
     results = []
-    for t in dict.fromkeys(tickers):
-        df = frames[t]
+    for t, df in zip(unique, frames):
         rows, truncated = (
             to_rows(df, max_rows, intraday)
             if response_format == "rows"
@@ -171,14 +161,39 @@ async def get_splits(ticker: Ticker) -> SplitsResult:
     return SplitsResult(ticker=ticker, count=len(events), splits=events)
 
 
-@mcp.tool()
-def retrieve_financial_statements(ticker: str, indicator: str) -> dict:
+@mcp.tool(name="tearsheet_get_financial_statement", annotations=READ_ONLY_REMOTE)
+async def get_financial_statement(
+    ticker: Ticker, statement: Statement, period: Period = "annual"
+) -> FinancialStatementResult:
+    """Get one financial statement with line items mapped to canonical field names.
+
+    Use for raw line items (revenue, total_debt, capital_expenditure, ...). For
+    ratios such as margins or debt-to-equity use tearsheet_get_fundamentals.
+
+    statement: income_statement, balance_sheet or cash_flow. period: annual (about
+    4 fiscal years) or quarterly (about 5 quarters). Values are in the reporting
+    currency as reported by Yahoo: capital_expenditure and dividends_paid are
+    negative (cash outflows); diluted_eps is per share.
+
+    Returns fiscal_periods newest first as {period_end, fields}, missing_fields
+    (canonical fields Yahoo did not report) and unmapped_labels (Yahoo line items
+    with no canonical name).
+
+    Example: {"ticker": "MSFT", "statement": "cash_flow", "period": "annual"}
     """
-    Retrieves the annual income statements, balance sheet, or cash flow for the given ticker.
-    Args:
-        ticker: The ticker symbol of the stock to retrieve the statements for.
-        indicator: The type of financial statement to retrieve. e.g. "income_statement", "balance_sheet", "cash_flow"
-    Returns:
-        A JSON-serializable dict with income statements, balance sheet, or cash flow.
-    """
-    return get_financial_statements(ticker, indicator)
+    ns, currency = await market.gather(
+        partial(fundamentals.get_statement, ticker, statement, period),
+        partial(fundamentals.get_financial_currency, ticker),
+    )
+    return FinancialStatementResult(
+        ticker=ticker,
+        statement=statement,
+        period=period,
+        currency=currency,
+        fiscal_periods=[
+            FiscalPeriod(period_end=p.period_end, fields=p.fields) for p in ns.periods
+        ],
+        missing_fields=ns.missing_fields,
+        unmapped_labels=ns.unmapped_labels,
+        notes=ns.notes,
+    )

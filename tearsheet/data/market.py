@@ -8,13 +8,15 @@ Price histories use a timezone-naive DatetimeIndex named `date` (exchange local
 time) and lowercase columns: open, high, low, close, volume.
 """
 
+from collections.abc import Awaitable, Callable
 from datetime import date, datetime, timedelta, timezone
 from functools import partial
-from typing import Any, Callable, TypeVar
+from typing import Any, TypeVar
 
 import anyio
 import pandas as pd
 import yfinance as yf
+from mcp.server.mcpserver.exceptions import ToolError
 
 from tearsheet.data.cache import DAILY_TTL, INTRADAY_TTL, TTLCache
 from tearsheet.errors import (
@@ -46,7 +48,7 @@ _history_cache = TTLCache()
 _actions_cache = TTLCache()
 
 
-async def _run(what: str, fn: Callable[[], T]) -> T:
+async def run_yf(what: str, fn: Callable[[], T]) -> T:
     """Run a blocking yfinance call in a thread, mapping unexpected errors."""
     try:
         return await anyio.to_thread.run_sync(fn)
@@ -54,6 +56,33 @@ async def _run(what: str, fn: Callable[[], T]) -> T:
         if type(exc).__name__ in ("YFTzMissingError", "YFTickerMissingError"):
             raise ticker_not_found(what) from None
         raise upstream_failure(what, exc) from None
+
+
+async def gather(*calls: Callable[[], Awaitable[Any]]) -> list[Any]:
+    """Run async calls concurrently. Re-raises the first ToolError by call order.
+
+    Errors are collected instead of escaping the task group, so the client gets the
+    actionable ToolError message rather than an ExceptionGroup.
+    """
+    results: list[Any] = [None] * len(calls)
+    errors: list[BaseException | None] = [None] * len(calls)
+
+    async def run(i: int) -> None:
+        try:
+            results[i] = await calls[i]()
+        except Exception as exc:
+            errors[i] = exc
+
+    async with anyio.create_task_group() as tg:
+        for i in range(len(calls)):
+            tg.start_soon(run, i)
+    tool_errors = [e for e in errors if isinstance(e, ToolError)]
+    if len(tool_errors) > 1:
+        raise ToolError(" ".join(dict.fromkeys(str(e) for e in tool_errors)))
+    for e in errors:
+        if e is not None:
+            raise e
+    return results
 
 
 def _suggest(ticker: str) -> list[str]:
@@ -76,14 +105,14 @@ def _suggest(ticker: str) -> list[str]:
     return seen[:3]
 
 
-def _ticker_exists(ticker: str) -> bool:
+def ticker_exists(ticker: str) -> bool:
     try:
         return num(yf.Ticker(ticker).fast_info["lastPrice"]) is not None
     except Exception:
         return False
 
 
-async def _raise_not_found(ticker: str) -> None:
+async def raise_not_found(ticker: str) -> None:
     suggestions = await anyio.to_thread.run_sync(partial(_suggest, ticker))
     raise ticker_not_found(ticker, suggestions)
 
@@ -125,13 +154,13 @@ async def get_history(
     ttl = INTRADAY_TTL if intraday or end >= date.today() else DAILY_TTL
 
     async def load() -> pd.DataFrame:
-        df = await _run(
+        df = await run_yf(
             ticker, partial(_download_history, ticker, start, end, interval, adjusted)
         )
         if df.empty:
-            exists = await anyio.to_thread.run_sync(partial(_ticker_exists, ticker))
+            exists = await anyio.to_thread.run_sync(partial(ticker_exists, ticker))
             if not exists:
-                await _raise_not_found(ticker)
+                await raise_not_found(ticker)
             raise no_data_in_range(ticker, str(start), str(end), interval)
         return df
 
@@ -178,17 +207,17 @@ async def get_quote(ticker: str) -> Quote:
     try:
         return await anyio.to_thread.run_sync(partial(_read_quote, ticker))
     except LookupError:
-        await _raise_not_found(ticker)
+        await raise_not_found(ticker)
         raise  # unreachable, keeps type checkers happy
     except Exception as exc:
         raise upstream_failure(ticker, exc) from None
 
 
 async def get_company_info(ticker: str) -> CompanyInfo:
-    info: dict = await _run(ticker, lambda: yf.Ticker(ticker).info or {})
+    info: dict = await run_yf(ticker, lambda: yf.Ticker(ticker).info or {})
     name = info.get("longName") or info.get("shortName")
     if not name and not info.get("quoteType"):
-        await _raise_not_found(ticker)
+        await raise_not_found(ticker)
     return CompanyInfo(
         ticker=ticker,
         name=name,
@@ -223,12 +252,12 @@ def _series_to_events(series: pd.Series) -> list[DatedValue]:
 
 async def _get_actions(ticker: str, kind: str) -> list[DatedValue]:
     async def load() -> list[DatedValue]:
-        series = await _run(ticker, lambda: getattr(yf.Ticker(ticker), kind))
+        series = await run_yf(ticker, lambda: getattr(yf.Ticker(ticker), kind))
         events = _series_to_events(series)
         if not events:
-            exists = await anyio.to_thread.run_sync(partial(_ticker_exists, ticker))
+            exists = await anyio.to_thread.run_sync(partial(ticker_exists, ticker))
             if not exists:
-                await _raise_not_found(ticker)
+                await raise_not_found(ticker)
         return events
 
     return await _actions_cache.get_or_load((kind, ticker), DAILY_TTL, load)
