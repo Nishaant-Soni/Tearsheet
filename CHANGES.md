@@ -378,6 +378,18 @@ Deviations and additions:
   response (and a `(periods: ...)` suffix when not all of them). Each year's exact
   figure stays in `inputs_used`.
 
+- **Partial-period notes are full sentences.** The addendum's wording (`"only
+  <statements> reported so far"`) and the follow-up wording lacked a verb. Notes now
+  read, for example, `"2026-09-30: the income statement is only partly reported so far
+  (diluted_eps, diluted_shares); the balance sheet is not reported yet; metrics needing
+  the missing data are null."` or `"2026-12-31: only the balance sheet is reported so
+  far; ..."`.
+- **A dropped newest period is called out.** When a partly reported period newer than
+  every returned period has no value for any requested metric,
+  `tearsheet_get_fundamentals` leaves it out with one line, e.g. `"2026-09-30 left out:
+  only partly reported so far, and none of the requested metrics has a value yet."`
+  Older columns that have aged out of Yahoo's window still drop off silently.
+
 ## Regression coverage
 
 Each problem from the refactor spec has a test that fails on the original code. The

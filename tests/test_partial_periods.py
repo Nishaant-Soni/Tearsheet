@@ -57,9 +57,9 @@ def test_partial_notes_wording():
         notes=[],
     )
     assert merged.partial_notes() == {
-        "2026": "2026: only the balance sheet reported so far; metrics needing other "
+        "2026": "2026: only the balance sheet is reported so far; metrics needing other "
         "statements are null.",
-        "2023": "2023: only the balance sheet available from Yahoo for this period; "
+        "2023": "2023: only the balance sheet is available from Yahoo for this period; "
         "metrics needing other statements are null.",
     }
 
@@ -74,24 +74,33 @@ async def test_kept_partial_period_is_explained(part):
     assert ends == BALANCE_ENDS  # each has a current ratio, so none is dropped
     assert out["periods"][0]["metrics"] == {"net_margin": None, "current_ratio": 1.6}
     assert (
-        "2026-12-31: only the balance sheet reported so far; metrics needing other "
+        "2026-12-31: only the balance sheet is reported so far; metrics needing other "
         "statements are null." in out["notes"]
     )
     assert any(
-        n.startswith("2023-12-31: only the balance sheet available")
+        n.startswith("2023-12-31: only the balance sheet is available")
         for n in out["notes"]
     )
 
 
 @pytest.mark.anyio
-async def test_dropped_partial_period_leaves_no_notes(part):
+async def test_dropped_newest_partial_period_gets_one_line(part):
     out = await call(
         "tearsheet_get_fundamentals",
         {"ticker": "PART", "metrics": ["net_margin", "roe"]},
     )
     ends = [p["period_end"] for p in out["periods"]]
     assert ends == INCOME_ENDS  # balance-only periods have neither metric
-    assert not any("2026-12-31" in n or "2023-12-31" in n for n in out["notes"])
+    # The newer one is called out; the aged-out older column drops off silently.
+    assert (
+        "2026-12-31 left out: only partly reported so far, and none of the requested "
+        "metrics has a value yet." in out["notes"]
+    )
+    assert [n for n in out["notes"] if "2026-12-31" in n] == [
+        "2026-12-31 left out: only partly reported so far, and none of the requested "
+        "metrics has a value yet."
+    ]
+    assert not any("2023-12-31" in n for n in out["notes"])
 
 
 @pytest.mark.anyio
@@ -102,8 +111,10 @@ async def test_plot_trims_trailing_partial_period_and_says_why(part, chart_dir):
         "2025-12-31",
     ]
     assert "Not plotted, no roe value: 2023-12-31, 2026-12-31." in out["summary"]
-    assert "2026-12-31: only the balance sheet reported so far" in out["summary"]
-    assert "2023-12-31: only the balance sheet available from Yahoo" in out["summary"]
+    assert "2026-12-31: only the balance sheet is reported so far" in out["summary"]
+    assert (
+        "2023-12-31: only the balance sheet is available from Yahoo" in out["summary"]
+    )
 
 
 @pytest.mark.anyio
@@ -159,9 +170,12 @@ async def test_pe_ignores_early_eps_column(early_eps):
     by_end = {p["period_end"]: p["metrics"] for p in out["periods"]}
     assert by_end["2025-09-30"]["pe_ratio"] == pytest.approx(109.57 / 1.63, abs=1e-4)
     assert out["as_of_price"]["applies_to"]["pe_ratio"] == "2025-09-30"
-    # With P/E moved to FY2025, FY2026 has no values: dropped, and so are its notes.
+    # With P/E moved to FY2025, FY2026 has no values: dropped, with one line saying so.
     assert "2026-09-30" not in by_end
-    assert not any("2026-09-30" in n for n in out["notes"])
+    assert [n for n in out["notes"] if "2026-09-30" in n] == [
+        "2026-09-30 left out: only partly reported so far, and none of the requested "
+        "metrics has a value yet."
+    ]
 
 
 @pytest.mark.anyio
@@ -173,9 +187,8 @@ async def test_kept_early_eps_column_is_explained_consistently(early_eps):
     )
     assert out["periods"][0]["period_end"] == "2026-09-30"
     assert (
-        "2026-09-30: the income statement partly reported so far (diluted_eps, "
-        "diluted_shares only); metrics needing the missing data are null."
-        in out["notes"]
+        "2026-09-30: the income statement is only partly reported so far (diluted_eps, "
+        "diluted_shares); metrics needing the missing data are null." in out["notes"]
     )
     assert not any("only the income statement reported" in n for n in out["notes"])
 
@@ -187,6 +200,6 @@ async def test_statement_tool_flags_partly_reported_column(early_eps):
         {"ticker": "EARLY", "statement": "income_statement"},
     )
     assert (
-        "2026-09-30: partly reported (diluted_eps, diluted_shares only); revenue and "
-        "net_income missing." in out["notes"]
+        "2026-09-30: only partly reported (diluted_eps, diluted_shares); revenue and "
+        "net_income are missing." in out["notes"]
     )

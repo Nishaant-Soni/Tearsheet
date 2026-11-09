@@ -205,8 +205,9 @@ async def get_financial_statement(
         notes=[
             *ns.notes,
             *(
-                f"{end}: partly reported ({', '.join(present)} only); "
-                f"{' and '.join(CORE_FIELDS[statement])} missing."
+                f"{end}: only partly reported ({', '.join(present)}); "
+                f"{' and '.join(CORE_FIELDS[statement])} "
+                f"{'are' if len(CORE_FIELDS[statement]) > 1 else 'is'} missing."
                 for end, present in ns.partial_periods.items()
             ),
         ],

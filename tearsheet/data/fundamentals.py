@@ -256,6 +256,14 @@ STATEMENT_NAMES = {
 }
 
 
+def _names(statements: list[str]) -> str:
+    return " and ".join(STATEMENT_NAMES[s] for s in statements)
+
+
+def _verb(statements: list[str]) -> str:
+    return "are" if len(statements) > 1 else "is"
+
+
 @dataclass
 class MergedFields:
     periods: list[tuple[str, dict[str, float | None]]]  # newest first
@@ -287,30 +295,32 @@ class MergedFields:
             newer = newest_complete is None or end > newest_complete
             partly = [s for s in self.statements if (end, s) in self.partly]
             if not partly:
-                names = " and ".join(STATEMENT_NAMES[s] for s in full)
                 where = (
                     "reported so far"
                     if newer
                     else "available from Yahoo for this period"
                 )
                 out[end] = (
-                    f"{end}: only {names} {where}; metrics needing other statements "
-                    "are null."
+                    f"{end}: only {_names(full)} {_verb(full)} {where}; metrics needing "
+                    "other statements are null."
                 )
                 continue
             so_far = " so far" if newer else ""
             pieces = [
-                f"{STATEMENT_NAMES[s]} partly reported{so_far} "
-                f"({', '.join(self.partly[(end, s)])} only)"
+                f"{STATEMENT_NAMES[s]} is only partly reported{so_far} "
+                f"({', '.join(self.partly[(end, s)])})"
                 for s in partly
             ]
             if full:
-                names = " and ".join(STATEMENT_NAMES[s] for s in full)
-                pieces.insert(0, f"{names} reported")
+                pieces.insert(0, f"{_names(full)} {_verb(full)} reported")
             absent = [s for s in self.statements if s not in self.sources.get(end, [])]
             if absent:
-                names = " and ".join(STATEMENT_NAMES[s] for s in absent)
-                pieces.append(f"{names} not reported{so_far}")
+                missing = (
+                    "not reported yet"
+                    if newer
+                    else "not available from Yahoo for this period"
+                )
+                pieces.append(f"{_names(absent)} {_verb(absent)} {missing}")
             out[end] = (
                 f"{end}: {'; '.join(pieces)}; metrics needing the missing data are null."
             )

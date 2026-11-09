@@ -325,6 +325,14 @@ async def get_fundamentals(
         if any(v is not None for v in values.values())
     ]
     kept = {r.period_end for r in rows}
+    # A partly reported period newer than everything returned would otherwise vanish
+    # silently ("where is FY2026?"); aged-out older columns are expected to drop off.
+    left_out = [
+        f"{end} left out: only partly reported so far, and none of the requested "
+        "metrics has a value yet."
+        for end, _ in table.periods
+        if end not in kept and end in data.partial and (not kept or end > max(kept))
+    ]
     return FundamentalsResult(
         ticker=ticker,
         currency=data.currency,
@@ -336,5 +344,5 @@ async def get_fundamentals(
             for end, used in table.inputs_used.items()
             if end in kept
         },
-        notes=data.notes_for(kept),
+        notes=[*left_out, *data.notes_for(kept)],
     )
