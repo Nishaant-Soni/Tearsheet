@@ -96,7 +96,11 @@ async def test_backtest_tool_errors(wave):
         "tearsheet_backtest_ma_crossover",
         {**base, "end_date": "2024-01-20", "long_window": 50, "short_window": 10},
     )
-    assert r.is_error and "need at least 52" in r.content[0].text
+    assert (
+        r.is_error
+        and "need at least 50" in r.content[0].text
+        and "warm-up" in r.content[0].text
+    )
 
 
 @pytest.mark.anyio

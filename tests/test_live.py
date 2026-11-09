@@ -34,7 +34,10 @@ async def test_splits_eval_q1():
     assert {"date": "2024-06-26", "value": 50.0} in s["splits"]
 
 
-async def test_backtest_signal_dates_eval_q4():
+async def test_backtest_warmup_catches_early_cross():
+    # Eval v1 Q4 defined MAs from in-range bars only (first GOOGL buy 2023-03-27).
+    # With warm-up the MAs exist from 2023-01-03, so an earlier cross appears, and
+    # later crosses are unchanged because an SMA only uses its last N bars.
     r = await call(
         "tearsheet_backtest_ma_crossover",
         {
@@ -45,7 +48,9 @@ async def test_backtest_signal_dates_eval_q4():
             "long_window": 50,
         },
     )
-    assert r["buy_signal_dates"][0] == "2023-03-27"
+    assert r["warmup_bars_used"] == 51
+    assert r["buy_signal_dates"][0] == "2023-02-01"
+    assert "2023-03-27" in r["buy_signal_dates"]
 
 
 async def test_fundamentals_eval_q8():

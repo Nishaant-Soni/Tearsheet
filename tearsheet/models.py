@@ -358,6 +358,15 @@ CostBps = Annotated[
 RiskFreeRate = Annotated[
     float, Field(ge=0, le=0.2, description="Annual risk-free rate, fraction.")
 ]
+EntryModeValue = Literal["crossover", "state"]
+EntryMode = Annotated[
+    EntryModeValue,
+    Field(
+        description="'crossover' (default) enters only on a fresh buy signal. "
+        "'state' is long whenever the short SMA is above the long SMA at the close, "
+        "including from the first in-range bar if that already holds."
+    ),
+]
 
 
 class SeriesSummary(BaseModel):
@@ -386,6 +395,9 @@ class IndicatorResult(BaseModel):
     )
     truncated: bool = False
     total_rows: int
+    warmup_bars_used: int = Field(
+        description="Bars before start_date used so values are defined in range."
+    )
     notes: list[str]
 
 
@@ -418,14 +430,21 @@ class BacktestResult(BaseModel):
     ticker: str
     start_date: str
     end_date: str
-    bars: int
+    bars: int = Field(description="Daily bars in [start_date, end_date].")
     short_window: int
     long_window: int
     cost_bps: float
     risk_free_rate: float
     adjusted: bool
+    entry_mode: str
+    warmup_bars_used: int = Field(
+        description="Bars before start_date used to compute the moving averages."
+    )
+    warmup_start: str | None = Field(description="Date of the first warm-up bar.")
     total_return: float | None = Field(description="Fraction, net of costs.")
-    buy_and_hold_return: float | None
+    buy_and_hold_return: float | None = Field(
+        description="First in-range open to last close, no costs, fraction."
+    )
     excess_return: float | None
     cagr: float | None
     annualized_volatility: float | None

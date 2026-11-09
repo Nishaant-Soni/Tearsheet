@@ -18,8 +18,12 @@ def ticker_not_found(ticker: str, suggestions: Sequence[str] = ()) -> ToolError:
     return ToolError(msg)
 
 
-def no_data_in_range(ticker: str, start: str, end: str, interval: str) -> ToolError:
-    return ToolError(
+class NoDataError(ToolError):
+    """The symbol exists but has no bars in the requested range."""
+
+
+def no_data_in_range(ticker: str, start: str, end: str, interval: str) -> NoDataError:
+    return NoDataError(
         f"'{ticker}' returned no {interval} bars between {start} and {end}. "
         "Widen the date range, or check that the security traded in that period."
     )

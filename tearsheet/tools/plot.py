@@ -9,14 +9,16 @@ from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import CallToolResult, TextContent
 
 from server import PLOT_LOCAL_WRITE, mcp
-from tearsheet.analysis.backtest import crossover_signals
+from tearsheet.analysis import backtest
 from tearsheet.analysis.ratios import CURRENCY_METRICS, METRIC_UNITS
 from tearsheet.data import market
+from tearsheet.data.warmup import get_history_with_warmup
 from tearsheet.models import (
     ChartResult,
     ChartType,
     ComparisonTickers,
     EndDate,
+    EntryMode,
     LongWindow,
     Normalized,
     Period,
@@ -235,14 +237,16 @@ async def plot_ma_crossover(
     end_date: EndDate = None,
     short_window: ShortWindow = 9,
     long_window: LongWindow = 21,
+    entry_mode: EntryMode = "crossover",
     title: Title = None,
 ) -> ChartOutput:
     """Plot closes with short/long SMAs and mark crossover buy/sell signals.
 
-    Signals match tearsheet_backtest_ma_crossover: a buy marker where the short
-    SMA closes above the long SMA after being at or below it, a sell marker on the
-    reverse, drawn at the signal bar's close. Use the backtest tool for returns.
-    The text summary lists the signal dates.
+    Uses the same warm-up and signal computation as tearsheet_backtest_ma_crossover
+    (same inputs give the same signal dates): SMAs include long_window+1 bars before
+    start_date, only the requested range is drawn, and markers sit at the signal
+    bar's close. A signal on the last warm-up bar is listed in the summary but not
+    drawn. Use the backtest tool for returns.
 
     Example: {"ticker": "TSLA", "start_date": "2024-01-01", "short_window": 20,
               "long_window": 50}
@@ -252,29 +256,49 @@ async def plot_ma_crossover(
             f"long_window ({long_window}) must be greater than short_window ({short_window})."
         )
     rng = resolve_range(start_date, end_date, "1d")
-    df = await market.get_history(ticker, rng.start, rng.end, "1d")
-    if len(df) <= long_window:
+    hist = await get_history_with_warmup(
+        ticker, rng.start, rng.end, "1d", True, long_window + 1
+    )
+    if len(hist.df) < long_window:
         raise ToolError(
-            f"Only {len(df)} daily bars in range; need more than long_window={long_window}. "
-            "Use an earlier start_date or a shorter long_window."
+            f"Only {len(hist.df)} daily bars up to {rng.end}, including warm-up; need "
+            f"at least {long_window} for long_window={long_window}. Use a shorter "
+            "long_window or a later end_date."
         )
-    sig = crossover_signals(df["close"], short_window, long_window)["signal"]
-    buys = [fmt_date(d) for d in df.index[sig == 1]]
-    sells = [fmt_date(d) for d in df.index[sig == -1]]
-    s = summarize(df)
+    bt = backtest.backtest_ma_crossover(
+        hist.df,
+        short_window,
+        long_window,
+        cost_bps=0.0,
+        first_in_range=hist.first_in_range,
+        entry_mode=entry_mode,
+    )
+    buys = [fmt_date(d) for d in bt.buy_signals]
+    sells = [fmt_date(d) for d in bt.sell_signals]
+    s = summarize(hist.in_range)
     png, path = await _render_and_save(
         partial(
-            charts.ma_crossover_chart, df, ticker, short_window, long_window, title
+            charts.ma_crossover_chart,
+            hist.df,
+            ticker,
+            short_window,
+            long_window,
+            title,
+            hist.first_in_range,
+            bt.buy_signals,
+            bt.sell_signals,
         ),
         "ma_crossover",
         [ticker],
         s.first_date,
         s.last_date,
     )
+    notes = "".join(f" {n}" for n in hist.notes)
     text = (
-        f"{ticker} SMA {short_window}/{long_window}, {s.first_date} to {s.last_date}. "
-        f"{len(buys)} buy signals ({', '.join(buys) or 'none'}), {len(sells)} sell "
-        f"signals ({', '.join(sells) or 'none'}). Last close {s.last_close}. Saved to {path}."
+        f"{ticker} SMA {short_window}/{long_window} ({entry_mode}), {s.first_date} to "
+        f"{s.last_date}. {len(buys)} buy signals ({', '.join(buys) or 'none'}), "
+        f"{len(sells)} sell signals ({', '.join(sells) or 'none'}). Last close "
+        f"{s.last_close}.{notes} Saved to {path}."
     )
     return _respond(
         png,

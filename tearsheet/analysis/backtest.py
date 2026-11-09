@@ -4,13 +4,21 @@ Assumptions:
 - Signals use simple moving averages of the close. A buy signal fires at the close
   of bar t when the short MA closes above the long MA after being at or below it
   on bar t-1; a sell signal is the reverse.
+- Moving averages are computed over warm-up bars before the range plus the range,
+  so they are defined from the first in-range bar. Trading and every metric start
+  at the first in-range bar (`first_in_range`).
 - Orders fill at the open of bar t+1, never at the signal bar's close. A signal on
-  the last bar is not filled.
+  the last bar is not filled. A signal on the last warm-up bar fills at the first
+  in-range open, and that trade keeps its true (pre-range) signal date.
+- entry_mode="crossover" enters only on a fresh buy signal; "state" is long
+  whenever the short MA is above the long MA at the close.
 - Long-only: fully invested or flat. No leverage, shorting or position sizing.
 - `cost_bps` is charged on every entry and exit (5 bps = 0.05% of the trade).
   There is no other slippage model.
 - Returns are marked to market daily at the close. An open position at the end is
   valued at the last close and is not counted as a completed trade.
+- Buy-and-hold runs from the open of the first in-range bar (the earliest fill the
+  strategy could get) to the last close, without costs.
 """
 
 import math
@@ -20,6 +28,7 @@ import numpy as np
 import pandas as pd
 
 TRADING_DAYS = 252
+ENTRY_MODES = ("crossover", "state")
 
 
 @dataclass
@@ -73,13 +82,28 @@ def backtest_ma_crossover(
     long_window: int,
     cost_bps: float = 5.0,
     risk_free_rate: float = 0.0,
+    first_in_range: int = 0,
+    entry_mode: str = "crossover",
 ) -> BacktestStats:
+    """Backtest on `df` (warm-up bars, then the range starting at `first_in_range`)."""
     if short_window >= long_window:
         raise ValueError("long_window must be greater than short_window")
-    if len(df) < long_window + 2:
-        raise ValueError(f"need at least {long_window + 2} bars, got {len(df)}")
-    signals = crossover_signals(df["close"], short_window, long_window)["signal"]
-    return run_signals(df, signals.to_numpy(), cost_bps, risk_free_rate)
+    if entry_mode not in ENTRY_MODES:
+        raise ValueError(f"entry_mode must be one of {ENTRY_MODES}")
+    if len(df) < long_window:
+        raise ValueError(f"need at least {long_window} bars, got {len(df)}")
+    if not 0 <= first_in_range < len(df):
+        raise ValueError("first_in_range must point at a bar in df")
+    sig = crossover_signals(df["close"], short_window, long_window)
+    signals = sig["signal"].to_numpy()
+    if entry_mode == "crossover":
+        enter, exit_ = signals == 1, signals == -1
+    else:
+        above = (sig["short_ma"] > sig["long_ma"]).to_numpy()  # NaN compares False
+        enter, exit_ = above, ~above
+    return _simulate(
+        df, enter, exit_, signals, cost_bps, risk_free_rate, first_in_range
+    )
 
 
 def run_signals(
@@ -87,8 +111,31 @@ def run_signals(
     signals: np.ndarray,
     cost_bps: float = 5.0,
     risk_free_rate: float = 0.0,
+    first_in_range: int = 0,
 ) -> BacktestStats:
     """Simulate a long-only book from per-bar signals (+1 buy, -1 sell, 0 none)."""
+    signals = np.asarray(signals)
+    return _simulate(
+        df,
+        signals == 1,
+        signals == -1,
+        signals,
+        cost_bps,
+        risk_free_rate,
+        first_in_range,
+    )
+
+
+def _simulate(
+    df: pd.DataFrame,
+    enter: np.ndarray,
+    exit_: np.ndarray,
+    signals: np.ndarray,
+    cost_bps: float,
+    risk_free_rate: float,
+    first: int,
+) -> BacktestStats:
+    """Act on bar t's flags at bar t+1's open, from the first in-range bar onward."""
     opens = df["open"].to_numpy(dtype=float)
     closes = df["close"].to_numpy(dtype=float)
     dates = df.index
@@ -99,13 +146,13 @@ def run_signals(
     in_market = np.zeros(n, dtype=bool)  # holding at the close of bar i
     trades: list[Trade] = []
     position = False
-    for i in range(1, n):
-        prev_signal = signals[i - 1]
-        if not position and prev_signal == 1:
+    # With warm-up, the first in-range bar can act on the last warm-up bar's flags.
+    for i in range(max(first, 1), n):
+        if not position and enter[i - 1]:
             position = True
             trades.append(Trade(dates[i - 1], dates[i], opens[i]))
             daily[i] = keep * closes[i] / opens[i] - 1
-        elif position and prev_signal == -1:
+        elif position and exit_[i - 1]:
             position = False
             t = trades[-1]
             t.exit_signal_date, t.exit_date, t.exit_price = (
@@ -120,6 +167,13 @@ def run_signals(
         in_market[i] = position
 
     notes: list[str] = []
+    start = dates[first]
+    early = [t for t in trades if t.signal_date < start]
+    if early:
+        notes.append(
+            f"The first trade's signal fired on {early[0].signal_date.date()}, the last "
+            f"warm-up bar before the range, and filled at the first in-range open."
+        )
     if position:
         t = trades[-1]
         t.exit_date, t.exit_price, t.open_at_end = dates[-1], closes[-1], True
@@ -128,23 +182,24 @@ def run_signals(
             "Position still open at the end: marked to the last close, no exit cost, "
             "not counted in num_trades."
         )
-    if signals[-1] != 0:
+    if (not position and enter[-1]) or (position and exit_[-1]):
         notes.append(
             "A signal on the last bar was not filled (fills happen next open)."
         )
 
-    equity = pd.Series(np.cumprod(1 + daily), index=dates)
+    equity = pd.Series(np.cumprod(1 + daily[first:]), index=dates[first:])
     total_return = equity.iloc[-1] - 1
-    buy_and_hold = closes[-1] / closes[0] - 1
+    buy_and_hold = closes[-1] / opens[first] - 1
 
-    years = (dates[-1] - dates[0]).days / 365.25
+    years = (dates[-1] - start).days / 365.25
     cagr = (
         (equity.iloc[-1] ** (1 / years) - 1)
         if years > 0 and equity.iloc[-1] > 0
         else None
     )
 
-    rets = daily[1:]
+    # Without warm-up, bar 0 can never hold a fill, so it carries no return.
+    rets = daily[first:] if first > 0 else daily[1:]
     std = rets.std(ddof=1) if len(rets) > 1 else 0.0
     if std > 0 and math.isfinite(std):
         vol = std * math.sqrt(TRADING_DAYS)
@@ -156,12 +211,17 @@ def run_signals(
     else:
         vol, sharpe = (0.0 if std == 0 else None), None
 
-    drawdown = equity / equity.cummax() - 1
-    max_dd = float(drawdown.min())
+    # Peak starts at the initial capital (1.0) so a loss on the entry day counts.
+    peak = pd.Series(
+        np.maximum.accumulate(np.r_[1.0, equity.to_numpy()])[1:], index=equity.index
+    )
+    drawdown = equity / peak - 1
+    max_dd = float(min(drawdown.min(), 0.0))
     dd_start = dd_end = None
     if max_dd < 0:
         dd_end = drawdown.idxmin()
-        dd_start = equity.loc[:dd_end].idxmax()
+        before = equity.loc[:dd_end]
+        dd_start = before.idxmax() if before.max() >= 1.0 else start
 
     closed = [t for t in trades if not t.open_at_end]
     if not closed:
@@ -169,6 +229,7 @@ def run_signals(
             "No completed trades in this range; try a longer range or shorter windows."
         )
     returns = [t.ret for t in closed if t.ret is not None]
+    in_range_buys = [d for d, s in zip(dates[first:], signals[first:]) if s == 1]
     return BacktestStats(
         total_return=total_return,
         buy_and_hold_return=buy_and_hold,
@@ -182,10 +243,10 @@ def run_signals(
         num_trades=len(closed),
         win_rate=sum(r > 0 for r in returns) / len(returns) if returns else None,
         avg_trade_return=sum(returns) / len(returns) if returns else None,
-        exposure=float(in_market.mean()),
+        exposure=float(in_market[first:].mean()),
         trades=trades,
-        buy_signals=list(dates[signals == 1]),
-        sell_signals=list(dates[signals == -1]),
+        buy_signals=sorted({*(t.signal_date for t in early), *in_range_buys}),
+        sell_signals=[d for d, s in zip(dates[first:], signals[first:]) if s == -1],
         equity=equity,
         notes=notes,
     )

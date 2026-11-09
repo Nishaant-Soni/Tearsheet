@@ -102,8 +102,10 @@ def test_crossover_end_to_end():
     assert bt.num_trades == 1
 
 
-def test_needs_long_window_plus_two_bars():
-    with pytest.raises(ValueError, match="at least 12"):
-        backtest_ma_crossover(bars([1.0] * 11), 5, 10)
+def test_needs_one_full_long_window_including_warmup():
+    with pytest.raises(ValueError, match="at least 10"):
+        backtest_ma_crossover(bars([1.0] * 9), 5, 10)
+    # Exactly long_window bars is enough now that warm-up bars count.
+    backtest_ma_crossover(bars([1.0] * 10), 5, 10)
     with pytest.raises(ValueError, match="greater"):
         backtest_ma_crossover(bars([1.0] * 50), 10, 10)

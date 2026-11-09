@@ -47,18 +47,24 @@ Plot tools return the image, a short text summary (file path, date range, last c
 - Dates are `YYYY-MM-DD`. `end_date` is **inclusive** and defaults to today.
 - Price history and indicators return a **summary** by default. Pass `response_format="rows"` for individual bars, capped at `max_rows` (default 100, max 1000). Longer series are evenly downsampled and flagged `truncated`.
 - Prices are adjusted for splits and dividends by default.
+- Indicators, the backtest and the crossover chart fetch **warm-up bars** before `start_date`, so moving averages and indicators are defined from the first day of the range. Only in-range values are returned, and `warmup_bars_used` says how many were used. If less history exists (a recent listing, or Yahoo's intraday limits), a note says how many bars were available.
 - Intraday limits are checked up front: `1m` covers at most 7 days within the last 30, `5m`/`15m`/`30m` the last 60 days, `1h` the last 730 days.
 - Errors come back as MCP errors (`isError: true`) that say what to change, e.g. a ticker typo (`BRK.B` suggests `BRK-B`) or a date range that is too short.
 
 ### Backtest assumptions
 `tearsheet_backtest_ma_crossover` uses daily bars and:
+- computes the SMAs over `long_window + 1` warm-up bars plus the range, then trades and measures only from the first in-range bar,
 - detects a crossover at the **close** of bar t (short SMA above the long SMA after being at or below it the day before; the reverse for a sell),
-- **fills at the open of bar t+1**, never at the signal bar's close. A signal on the last bar is not filled,
+- **fills at the open of bar t+1**, never at the signal bar's close. A signal on the last bar is not filled. A signal on the last warm-up bar fills at the first in-range open and keeps its earlier `signal_date`,
+- with `entry_mode="crossover"` (default) enters only on a fresh buy signal; with `entry_mode="state"` is long whenever the short SMA is above the long SMA, including from the first in-range bar,
 - is long-only, fully invested or flat,
 - charges `cost_bps` (default 5) on every entry and exit, with no other slippage model,
 - marks the position to market every day, so max drawdown includes dips during open trades,
 - annualizes volatility and Sharpe with 252 trading days. Sharpe uses `risk_free_rate` (default 0),
-- counts completed round trips in `num_trades`. A position still open at the end is listed with `open_at_end: true`.
+- counts completed round trips in `num_trades`. A position still open at the end is listed with `open_at_end: true`,
+- measures `buy_and_hold_return` from the **open of the first in-range bar** (the earliest fill the strategy could get) to the last close, without costs.
+
+`tearsheet_plot_ma_crossover` uses the same warm-up and signal computation, so for the same inputs it lists the same signal dates as the backtest.
 
 ## Installation
 1. **Clone the repository**

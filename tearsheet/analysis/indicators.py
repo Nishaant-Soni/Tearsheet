@@ -128,3 +128,30 @@ def compute(
         return bollinger_bands(df, window, num_std)
     funcs = {"sma": sma, "ema": ema, "rsi": rsi, "atr": atr, "stochastic": stochastic}
     return funcs[indicator](df, window)
+
+
+# Recursive smoothing never fully forgets its seed. These multiples keep the seed's
+# effect under 1e-3 in measured tests (EMA decays by about e^-2 per window, Wilder
+# smoothing by about e^-1), versus a 20x reference warm-up.
+EMA_WARMUP = 6
+WILDER_WARMUP = 12
+MACD_WARMUP = 5
+
+
+def warmup_bars(
+    indicator: str, window: int, slow: int = 26, signal: int = 9, smooth: int = 3
+) -> int:
+    """Bars of history before the range needed for a value on the first in-range bar."""
+    if indicator in ("sma", "bollinger_bands"):
+        return window
+    if indicator == "stochastic":
+        return window + smooth - 1  # %D averages the last `smooth` %K values
+    if indicator == "volatility":
+        return window + 1  # returns lose one bar
+    if indicator == "ema":
+        return EMA_WARMUP * window
+    if indicator in ("rsi", "atr"):
+        return WILDER_WARMUP * window
+    if indicator == "macd":
+        return MACD_WARMUP * (slow + signal)
+    raise ValueError(f"unknown indicator {indicator}")

@@ -234,19 +234,35 @@ def ma_crossover_chart(
     short_window: int,
     long_window: int,
     title: str | None,
+    first_in_range: int = 0,
+    buy_dates: list[pd.Timestamp] | None = None,
+    sell_dates: list[pd.Timestamp] | None = None,
 ) -> bytes:
-    """Close with both SMAs and markers at the buy/sell signal closes."""
+    """Close with both SMAs and markers at the buy/sell signal closes.
+
+    `df` may start with warm-up bars; SMAs use them but only bars from
+    `first_in_range` on are drawn. Pass the backtest's signal dates so the chart
+    and backtest agree; signals before the range are not drawn.
+    """
     sig = crossover_signals(df["close"], short_window, long_window)
-    buys = sig["signal"] == 1
-    sells = sig["signal"] == -1
+    if buy_dates is None:
+        buy_dates = list(df.index[sig["signal"] == 1])
+    if sell_dates is None:
+        sell_dates = list(df.index[sig["signal"] == -1])
+    view = df.iloc[first_in_range:]
+    sig = sig.iloc[first_in_range:]
+    buys = view.index.isin(buy_dates)
+    sells = view.index.isin(sell_dates)
     fig = _new_figure()
     ax = fig.add_subplot()
-    ax.plot(df.index, df["close"], label="Close", color="tab:blue", alpha=0.5)
-    ax.plot(df.index, sig["short_ma"], label=f"SMA {short_window}", color="tab:orange")
-    ax.plot(df.index, sig["long_ma"], label=f"SMA {long_window}", color="tab:purple")
+    ax.plot(view.index, view["close"], label="Close", color="tab:blue", alpha=0.5)
+    ax.plot(
+        view.index, sig["short_ma"], label=f"SMA {short_window}", color="tab:orange"
+    )
+    ax.plot(view.index, sig["long_ma"], label=f"SMA {long_window}", color="tab:purple")
     ax.scatter(
-        df.index[buys],
-        df["close"][buys],
+        view.index[buys],
+        view["close"][buys],
         marker="^",
         color="green",
         s=100,
@@ -254,8 +270,8 @@ def ma_crossover_chart(
         label="Buy signal",
     )
     ax.scatter(
-        df.index[sells],
-        df["close"][sells],
+        view.index[sells],
+        view["close"][sells],
         marker="v",
         color="red",
         s=100,

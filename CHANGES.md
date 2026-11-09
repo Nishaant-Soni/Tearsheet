@@ -161,8 +161,8 @@ name), `fcf_margin`. `tearsheet_get_fundamentals` computes all 17 metrics by def
 - **Backtest adds `buy_signal_dates` and `sell_signal_dates`**, listing every crossover
   (including a sell signal while flat, which does not trade), and an `adjusted` flag.
 - **Indicators accept `interval`** (needed to annualize volatility and to reject it
-  for intraday bars) and are computed from bars in the requested range only, so the
-  first values are warm-up nulls. No extra history is fetched before `start_date`.
+  for intraday bars). Until addendum A1 they were computed from bars in the
+  requested range only; A1 replaced that with warm-up bars (see below).
 - **RSI is 50 when the price does not move at all** (both average gain and loss are
   0); the spec only defines the zero-loss case.
 - **Period growth divides by |prev|**, as before, so -50 to -25 is +0.5.
@@ -197,6 +197,58 @@ name), `fcf_margin`. `tearsheet_get_fundamentals` computes all 17 metrics by def
   splits calls on both surfaces; Claude answered it from its own knowledge in both runs.
 - **`tearsheet/serialize.py` added** (not in the spec's layout) for NaN/inf to `None`,
   rounding, summaries and row downsampling, shared by all tool wrappers.
+
+## Addendum A1: warm-up bars
+
+Moving averages and indicators were computed only from bars inside the requested
+range, so a 50-day MA was undefined for the first ~50 trading days and early signals
+were missed (MSFT 20/50 from 2023-01-01 found only the 2023-10-25 buy, with 18%
+exposure). Now:
+
+- **Warm-up history.** `tearsheet/data/warmup.py` fetches bars before `start_date` in
+  the same cached `get_history` call and keeps only as many as needed. The caller's
+  range is validated exactly as before; intraday warm-up is clamped to Yahoo's lookback
+  window with a note instead of raising. Fewer available bars (new listings) give a
+  note with the count, not an error. Outputs report `warmup_bars_used`.
+- **Backtest.** SMAs and signals use warm-up plus range; trading and every metric start
+  at the first in-range bar. A signal on the last warm-up bar fills at the first
+  in-range open and keeps its pre-range `signal_date`. New `entry_mode`:
+  `"crossover"` (default, fresh cross only) or `"state"` (long whenever short > long).
+  New outputs `entry_mode`, `warmup_bars_used`, `warmup_start`. The old requirement of
+  `long_window + 2` bars inside the range is gone: a backtest needs `long_window` bars
+  including warm-up.
+- **Buy-and-hold basis changed:** `buy_and_hold_return` now runs from the open of the
+  first in-range bar (the earliest fill the strategy could get) to the last close,
+  without costs. It was first close to last close.
+- **Indicators** compute on warm-up plus range and return only in-range values;
+  summary, rows and `total_rows` cover the range. With enough history the first
+  in-range value is defined.
+- **Crossover chart** uses the backtest's warm-up and signal computation (same
+  `entry_mode`) and draws only the range, so it lists the same signal dates as the
+  backtest. A signal on the last warm-up bar is listed in the summary but not drawn.
+- MSFT 20/50 from 2023-01-01 now finds the 2023-02-07 and 2023-10-25 buys, exposure
+  69.6%, excess return -24.8% (was -47.8%).
+
+Deviations from the addendum:
+
+- **Warm-up for recursive indicators is longer than 3x window.** The addendum's own
+  acceptance test (values agree to 1e-3 between 3x and 10x warm-up) fails at 3x:
+  measured on AAPL, NVDA, KO and a synthetic series, the largest differences were
+  0.009 for EMA, 0.83 RSI points, 0.046 for ATR and 0.024 for MACD at 3*slow+signal.
+  EMA forgets its seed by about e^-2 per window and Wilder smoothing (RSI, ATR) by
+  about e^-1. The warm-up is 6x window for EMA, 12x window for RSI and ATR, and
+  5x(slow+signal) for MACD; against a 20x reference the worst differences were
+  2.8e-4, 1.0e-4, 2.7e-5 and 2.8e-4. Tests assert < 1e-3 for each.
+- **Stochastic uses window + 2 warm-up bars**, not window, because %D averages the
+  last 3 %K values; with window bars its first two in-range values would be null.
+- **The warm-up helper returns a `WarmupHistory`** (frame, first in-range position,
+  notes) rather than a `(DataFrame, int)` tuple, so short-history and clamp notes reach
+  the tool output.
+- **Eval v1 results predate A1.** Q4 and Q5 define their moving averages "using daily
+  closes from" the range start, the pre-A1 convention, and their ground truth follows
+  that wording. Under the new default the server reports earlier crosses: GOOGL's first
+  2023 buy becomes 2023-02-01 (Q4's expected answer is GOOGL:2023-03-27). Q6's RSI is
+  unchanged at 57.95. The recorded results are kept as measured.
 
 ## Regression coverage
 

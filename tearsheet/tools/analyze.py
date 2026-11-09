@@ -9,7 +9,7 @@ from tearsheet.analysis.ratios import (
     ALL_METRICS,
     CURRENCY_METRICS,
 )
-from tearsheet.data import market
+from tearsheet.data.warmup import get_history_with_warmup
 from tearsheet.models import (
     INTRADAY_INTERVALS,
     Adjusted,
@@ -17,6 +17,7 @@ from tearsheet.models import (
     BacktestTrade,
     CostBps,
     EndDate,
+    EntryMode,
     FastPeriod,
     FundamentalMetric,
     FundamentalsPeriod,
@@ -62,8 +63,11 @@ async def calculate_indicator(
 
     For strategy returns use tearsheet_backtest_ma_crossover; for raw prices
     tearsheet_get_price_history.
-    Prices are fetched on the server (adjusted closes); computed from bars in the
-    range only, so the first values are warm-up nulls. Outputs: sma, ema (price);
+    Prices are fetched on the server (adjusted closes), including warm-up bars
+    before start_date so values are defined from the first day; only in-range values
+    are returned. Warm-up: window bars for sma/bollinger_bands, window+2 stochastic,
+    window+1 volatility; recursive smoothing needs more to forget its seed: 6x window
+    for ema, 12x for rsi/atr, 5x (slow+signal) for macd. Outputs: sma, ema (price);
     rsi (0-100, Wilder; 100 if no losses); macd -> macd, signal, histogram (uses
     fast/slow/signal and ignores window); volatility (rolling std of returns,
     annualized, fraction; 1d/1wk/1mo only); bollinger_bands -> upper, middle,
@@ -84,10 +88,18 @@ async def calculate_indicator(
         )
     if indicator == "macd" and fast >= slow:
         raise ToolError(f"MACD needs fast < slow, got fast={fast}, slow={slow}.")
-    df = await market.get_history(ticker, rng.start, rng.end, interval)
-    out = indicators.compute(
-        df, indicator, window, fast, slow, signal, num_std, interval
+    hist = await get_history_with_warmup(
+        ticker,
+        rng.start,
+        rng.end,
+        interval,
+        True,
+        indicators.warmup_bars(indicator, window, slow, signal),
     )
+    full = indicators.compute(
+        hist.df, indicator, window, fast, slow, signal, num_std, interval
+    )
+    df, out = hist.in_range, full.iloc[hist.first_in_range :]
     intraday = interval in INTRADAY_INTERVALS
 
     if indicator == "macd":
@@ -96,11 +108,11 @@ async def calculate_indicator(
         params = {"window": window, "num_std": num_std}
     else:
         params = {"window": window}
-    notes = []
+    notes = list(hist.notes)
     if out.notna().sum().min() == 0:
         notes.append(
-            f"Only {len(df)} bars in range, too few for these parameters; every value "
-            "is null. Widen the date range."
+            f"Only {len(hist.df)} bars available including warm-up, too few for these "
+            "parameters; every value is null. Use an earlier start_date."
         )
     rows, truncated = None, False
     if response_format == "rows":
@@ -120,6 +132,7 @@ async def calculate_indicator(
         rows=rows,
         truncated=truncated,
         total_rows=len(out),
+        warmup_bars_used=hist.warmup_bars_used,
         notes=notes,
     )
 
@@ -169,15 +182,20 @@ async def backtest_ma_crossover(
     cost_bps: CostBps = 5.0,
     risk_free_rate: RiskFreeRate = 0.0,
     adjusted: Adjusted = True,
+    entry_mode: EntryMode = "crossover",
 ) -> BacktestResult:
     """Backtest a long-only SMA crossover strategy on daily bars for one ticker.
 
     To see the signals on a chart use tearsheet_plot_ma_crossover.
     Buy when the short SMA closes above the long SMA after being at or below it;
-    sell on the reverse. Assumptions: signal at bar t's close, fill at bar t+1's
-    open (a last-bar signal is not filled); fully invested or flat; cost_bps on
-    each entry and exit, no other slippage; adjusted prices by default; MAs use
-    only bars in the range.
+    sell on the reverse (entry_mode='state': long whenever short > long). MAs use
+    long_window+1 warm-up bars before start_date, so they are defined from day 1;
+    trading and all metrics start at the first in-range bar. Signal at bar t's
+    close, fill at bar t+1's open (a last-bar signal is not filled; a signal on the
+    last warm-up bar fills at the first in-range open and keeps its earlier
+    signal_date). Fully invested or flat; cost_bps on each entry and exit, no other
+    slippage; adjusted prices by default. buy_and_hold_return runs from the first
+    in-range open to the last close, without costs.
 
     Returns fractions: total_return, buy_and_hold_return, excess_return, cagr,
     annualized_volatility (daily std * sqrt(252)), sharpe_ratio ((mean daily -
@@ -196,26 +214,37 @@ async def backtest_ma_crossover(
             f"({short_window})."
         )
     rng = resolve_range(start_date, end_date, "1d")
-    df = await market.get_history(ticker, rng.start, rng.end, "1d", adjusted)
-    if len(df) < long_window + 2:
+    hist = await get_history_with_warmup(
+        ticker, rng.start, rng.end, "1d", adjusted, long_window + 1
+    )
+    if len(hist.df) < long_window:
         raise ToolError(
-            f"Only {len(df)} daily bars between {rng.start} and {rng.end}; need at "
-            f"least {long_window + 2} for long_window={long_window}. Use an earlier "
-            "start_date or a shorter long_window."
+            f"Only {len(hist.df)} daily bars up to {rng.end}, including warm-up "
+            f"before {rng.start}; need at least {long_window} for "
+            f"long_window={long_window}. Use a shorter long_window or a later end_date."
         )
     bt = backtest.backtest_ma_crossover(
-        df, short_window, long_window, cost_bps, risk_free_rate
+        hist.df,
+        short_window,
+        long_window,
+        cost_bps,
+        risk_free_rate,
+        hist.first_in_range,
+        entry_mode,
     )
     return BacktestResult(
         ticker=ticker,
         start_date=str(rng.start),
         end_date=str(rng.end),
-        bars=len(df),
+        bars=len(hist.in_range),
         short_window=short_window,
         long_window=long_window,
         cost_bps=cost_bps,
         risk_free_rate=risk_free_rate,
         adjusted=adjusted,
+        entry_mode=entry_mode,
+        warmup_bars_used=hist.warmup_bars_used,
+        warmup_start=_day(hist.warmup_start),
         total_return=num(bt.total_return, RATIO_DP),
         buy_and_hold_return=num(bt.buy_and_hold_return, RATIO_DP),
         excess_return=num(bt.excess_return, RATIO_DP),
@@ -244,7 +273,7 @@ async def backtest_ma_crossover(
         ],
         buy_signal_dates=[_day(d) for d in bt.buy_signals],
         sell_signal_dates=[_day(d) for d in bt.sell_signals],
-        notes=bt.notes,
+        notes=[*hist.notes, *bt.notes],
     )
 
 
