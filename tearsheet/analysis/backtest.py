@@ -169,10 +169,19 @@ def _simulate(
     notes: list[str] = []
     start = dates[first]
     early = [t for t in trades if t.signal_date < start]
-    if early:
+    # Only a real crossover on the last warm-up bar counts as a buy signal; in state
+    # mode the opening entry can come from the short SMA simply being above the long.
+    early_cross = [t.signal_date for t in early if signals[first - 1] == 1]
+    if early_cross:
         notes.append(
             f"The first trade's signal fired on {early[0].signal_date.date()}, the last "
             f"warm-up bar before the range, and filled at the first in-range open."
+        )
+    elif early:
+        notes.append(
+            "The first trade entered at the first in-range open because the short SMA "
+            f"was already above the long SMA on {early[0].signal_date.date()}, the last "
+            "warm-up bar (state mode; not a crossover, so not in buy_signal_dates)."
         )
     if position:
         t = trades[-1]
@@ -245,7 +254,7 @@ def _simulate(
         avg_trade_return=sum(returns) / len(returns) if returns else None,
         exposure=float(in_market[first:].mean()),
         trades=trades,
-        buy_signals=sorted({*(t.signal_date for t in early), *in_range_buys}),
+        buy_signals=sorted({*early_cross, *in_range_buys}),
         sell_signals=[d for d, s in zip(dates[first:], signals[first:]) if s == -1],
         equity=equity,
         notes=notes,

@@ -139,6 +139,24 @@ async def test_state_mode_enters_at_first_in_range_open(fake_yahoo):
     assert t["entry_price"] == pytest.approx(df["open"].iloc[first], abs=1e-4)
     assert t["signal_date"] == day(df.index[first - 1])  # last warm-up bar
     assert state["entry_mode"] == "state" and state["exposure"] == 1.0
+    # That entry is a state, not a crossover, so it is not a buy signal.
+    assert state["buy_signal_dates"] == []
+    assert any("not a crossover" in n for n in state["notes"])
+
+
+def test_crossover_on_last_warmup_bar_is_a_buy_signal():
+    raw = v_shape()
+    df = normalize_history(raw)
+    k = int(
+        np.flatnonzero(crossover_signals(df["close"], SHORT, LONG)["signal"] == 1)[0]
+    )
+    first = k + 1  # the cross fires on the last warm-up bar
+    for mode in ("crossover", "state"):
+        bt = backtest_ma_crossover(
+            df, SHORT, LONG, 0, first_in_range=first, entry_mode=mode
+        )
+        assert bt.trades[0].signal_date == df.index[k]
+        assert bt.buy_signals[0] == df.index[k], mode
 
 
 @pytest.mark.anyio

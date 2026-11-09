@@ -342,6 +342,14 @@ Deviations and additions:
 - **Notes that already name their period** no longer repeat it in a
   `(periods: ...)` suffix.
 
+## Follow-ups after the addendum
+
+- **State-mode entries are not listed as buy signals.** When a state-mode backtest is
+  already long at the start, its opening trade's `signal_date` is the last warm-up bar,
+  where the short SMA was merely above the long one. `buy_signal_dates` lists
+  crossovers, so that date is now left out (a note explains the entry). A real
+  crossover on the last warm-up bar is still listed in both modes.
+
 ## Regression coverage
 
 Each problem from the refactor spec has a test that fails on the original code. The
