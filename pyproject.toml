@@ -1,7 +1,7 @@
 [project]
 name = "tearsheet"
 version = "0.1.0"
-description = "An MCP server that lets LLMs retrieve, analyze, and visualize stock price and financial statement data."
+description = "An MCP server for stock research on Yahoo Finance data: prices, financial statements, fundamental ratios, technical indicators, backtests and charts."
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
