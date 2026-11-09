@@ -297,6 +297,18 @@ Deviation from the addendum:
   to ordinary. Returning `None` would discard a correct count. The note keeps the
   remaining risk (treasury shares that Yahoo fails to report) visible.
 
+## Addendum A4: cache cleanup
+
+Expired entries were removed only when the same key was requested again, and the
+per-key locks were never removed, so a long-running server grew without bound.
+
+- Every `set` drops expired entries and locks that no live entry or in-flight load
+  needs (anyio hands a released lock straight to the next waiter, so "unlocked with
+  nobody waiting" is safe to forget). A failed load removes its own lock.
+- `max_entries` (default 256) caps each cache; the entries closest to expiry are
+  evicted first.
+- Concurrent requests for the same key still share one upstream fetch.
+
 ## Regression coverage
 
 Each problem from the refactor spec has a test that fails on the original code. The
@@ -328,6 +340,7 @@ P4/P5 scenarios were re-run against commit `41f093a` to confirm the old behavior
 | Negative equity (A2) | ROE -37.7% for profitable SBUX | `test_ratios.py::test_equity_ratios_undefined_for_non_positive_equity`, `test_negative_equity_tools.py` |
 | Cold-start MAs (A1) | first ~50 days missed | `test_warmup.py` |
 | Share count (A3) | issued shares incl. treasury | `test_fundamentals_mapping.py::test_issued_minus_treasury_when_ordinary_missing` |
+| Cache growth (A4) | expired entries and locks kept forever | `test_cache.py::test_expired_entries_are_swept_on_next_set`, `test_locks_do_not_outgrow_live_keys`, `test_max_entries_evicts_closest_to_expiry` |
 
 Tests run offline: yfinance is replaced by a fake and outbound sockets are refused.
 `uv run pytest -m live` runs four optional checks against Yahoo Finance.

@@ -3,6 +3,10 @@
 `functools.lru_cache` cannot wrap async loaders, so this is a small dict-based cache.
 A per-key lock makes concurrent requests for the same key share one upstream fetch.
 Values are copied on the way in and out, so callers can never mutate a cached frame.
+
+The cache cleans up after itself: every `set` drops expired entries and locks that
+no live entry or in-flight load needs, and at most `max_entries` entries are kept
+(the ones closest to expiry are evicted first).
 """
 
 import copy
@@ -16,6 +20,7 @@ import pandas as pd
 INTRADAY_TTL = 15 * 60
 DAILY_TTL = 4 * 60 * 60
 STATEMENT_TTL = 6 * 60 * 60
+MAX_ENTRIES = 256
 
 
 def _copy(value: Any) -> Any:
@@ -25,10 +30,20 @@ def _copy(value: Any) -> Any:
 
 
 class TTLCache:
-    def __init__(self, clock: Callable[[], float] = time.monotonic) -> None:
+    def __init__(
+        self,
+        clock: Callable[[], float] = time.monotonic,
+        max_entries: int = MAX_ENTRIES,
+    ) -> None:
+        if max_entries < 1:
+            raise ValueError("max_entries must be at least 1")
         self._clock = clock
+        self._max_entries = max_entries
         self._entries: dict[Hashable, tuple[float, Any]] = {}
         self._locks: dict[Hashable, anyio.Lock] = {}
+
+    def __len__(self) -> int:
+        return len(self._entries)
 
     def get(self, key: Hashable) -> Any | None:
         entry = self._entries.get(key)
@@ -41,7 +56,33 @@ class TTLCache:
         return _copy(value)
 
     def set(self, key: Hashable, value: Any, ttl: float) -> None:
-        self._entries[key] = (self._clock() + ttl, _copy(value))
+        now = self._clock()
+        for k in [
+            k for k, (expires_at, _) in self._entries.items() if now >= expires_at
+        ]:
+            del self._entries[k]
+        self._entries[key] = (now + ttl, _copy(value))
+        excess = len(self._entries) - self._max_entries
+        if excess > 0:
+            soonest = sorted(self._entries, key=lambda k: self._entries[k][0])[:excess]
+            for k in soonest:
+                del self._entries[k]
+        self._prune_locks()
+
+    def _prune_locks(self) -> None:
+        """Drop locks with no live entry and no task holding or waiting on them.
+
+        anyio hands a released lock straight to the next waiter, so a lock that is
+        unlocked with nobody waiting is safe to forget.
+        """
+        for k in [
+            k
+            for k, lock in self._locks.items()
+            if k not in self._entries
+            and not lock.locked()
+            and lock.statistics().tasks_waiting == 0
+        ]:
+            del self._locks[k]
 
     async def get_or_load(
         self, key: Hashable, ttl: float, loader: Callable[[], Awaitable[Any]]
@@ -50,13 +91,23 @@ class TTLCache:
         if cached is not None:
             return cached
         lock = self._locks.setdefault(key, anyio.Lock())
-        async with lock:
-            cached = self.get(key)
-            if cached is not None:
-                return cached
-            value = await loader()
-            self.set(key, value, ttl)
-            return _copy(value)
+        try:
+            async with lock:
+                cached = self.get(key)
+                if cached is not None:
+                    return cached
+                value = await loader()
+                self.set(key, value, ttl)
+                return _copy(value)
+        finally:
+            # A failed load leaves no entry; forget its lock unless others use it.
+            if (
+                key not in self._entries
+                and not lock.locked()
+                and lock.statistics().tasks_waiting == 0
+                and self._locks.get(key) is lock
+            ):
+                del self._locks[key]
 
     def clear(self) -> None:
         self._entries.clear()
