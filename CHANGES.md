@@ -268,6 +268,30 @@ although net income was positive every year, and `debt_to_equity` around -3.
   reason; it used to say "Yahoo does not report the inputs", which was wrong for
   negative equity.
 
+## Addendum A3: share count
+
+`shares_outstanding` fell back to `"Share Issued"`, which includes treasury shares, so
+book value per share and P/B were understated whenever the fallback was used.
+
+- Fallback order: `"Ordinary Shares Number"`, then `"Share Issued"` minus `"Treasury
+  Shares Number"` (note: `"<period>: shares_outstanding derived as shares issued minus
+  treasury shares."`), then the deviation below, then `None` with a note.
+- `"Share Issued"` and `"Treasury Shares Number"` count as mapped only when the
+  fallback uses them; otherwise they appear in `unmapped_labels`.
+- Checked on AAPL, MSFT, SBUX, KO, JPM, NVDA, TSLA, MCD, BKNG, TSM, BRK-B and XOM:
+  issued equals ordinary plus treasury in every case, and all twelve report
+  `"Ordinary Shares Number"`, so their share counts are unchanged.
+
+Deviation from the addendum:
+
+- **`"Share Issued"` alone is used when no treasury count is reported**, with the note
+  `"<period>: shares_outstanding taken from shares issued; Yahoo reports no treasury
+  shares for this period."` The addendum returns `None` here. Yahoo leaves out the
+  treasury line for companies that hold no treasury shares (they retire bought-back
+  shares): AAPL, MSFT, NVDA, TSLA, SBUX and TSM have no treasury line and issued equal
+  to ordinary. Returning `None` would discard a correct count. The note keeps the
+  remaining risk (treasury shares that Yahoo fails to report) visible.
+
 ## Regression coverage
 
 Each problem from the refactor spec has a test that fails on the original code. The
@@ -298,6 +322,7 @@ P4/P5 scenarios were re-run against commit `41f093a` to confirm the old behavior
 | Slow quote (P6) | `.info` for the currency | `test_market.py::test_quote_uses_fast_info_not_info` |
 | Negative equity (A2) | ROE -37.7% for profitable SBUX | `test_ratios.py::test_equity_ratios_undefined_for_non_positive_equity`, `test_negative_equity_tools.py` |
 | Cold-start MAs (A1) | first ~50 days missed | `test_warmup.py` |
+| Share count (A3) | issued shares incl. treasury | `test_fundamentals_mapping.py::test_issued_minus_treasury_when_ordinary_missing` |
 
 Tests run offline: yfinance is replaced by a fake and outbound sockets are refused.
 `uv run pytest -m live` runs four optional checks against Yahoo Finance.

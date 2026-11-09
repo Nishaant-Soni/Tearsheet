@@ -41,7 +41,8 @@ LABELS: dict[str, dict[str, list[str]]] = {
         "inventory": ["Inventory"],
         "total_debt": ["Total Debt"],
         "cash_and_equivalents": ["Cash And Cash Equivalents", "Cash Financial"],
-        "shares_outstanding": ["Ordinary Shares Number", "Share Issued"],
+        # Falls back to issued minus treasury shares: see _shares_outstanding.
+        "shares_outstanding": ["Ordinary Shares Number"],
     },
     "cash_flow": {
         "operating_cash_flow": [
@@ -62,6 +63,8 @@ FIELD_STATEMENT = {f: st for st, fields in LABELS.items() for f in fields}
 
 # Labels used only to derive a missing canonical field.
 TOTAL_EQUITY_LABEL = "Total Equity Gross Minority Interest"
+SHARES_ISSUED_LABEL = "Share Issued"  # includes treasury shares
+TREASURY_SHARES_LABEL = "Treasury Shares Number"
 
 _ATTRS = {
     ("income_statement", "annual"): "financials",
@@ -109,6 +112,44 @@ def _first(
     return None
 
 
+def _shares_outstanding(
+    df: pd.DataFrame, labels: list[str], col, end: str
+) -> tuple[float | None, str | None, set[str]]:
+    """Fallback when "Ordinary Shares Number" is missing: (value, note, labels used).
+
+    "Share Issued" counts treasury shares, so subtract them when Yahoo reports them.
+    Yahoo omits the treasury line for companies that hold none (they retire bought-
+    back shares; issued equals ordinary for AAPL, MSFT, NVDA, TSLA, SBUX, TSM), so
+    issued shares alone are used then, with a note.
+    """
+    issued = (
+        _value(df, SHARES_ISSUED_LABEL, col) if SHARES_ISSUED_LABEL in labels else None
+    )
+    treasury = (
+        _value(df, TREASURY_SHARES_LABEL, col)
+        if TREASURY_SHARES_LABEL in labels
+        else None
+    )
+    if issued is None:
+        return (
+            None,
+            f"{end}: shares_outstanding not reported (no ordinary or issued share count).",
+            set(),
+        )
+    if treasury is not None:
+        return (
+            num(issued - abs(treasury)),
+            f"{end}: shares_outstanding derived as shares issued minus treasury shares.",
+            {SHARES_ISSUED_LABEL, TREASURY_SHARES_LABEL},
+        )
+    return (
+        issued,
+        f"{end}: shares_outstanding taken from shares issued; Yahoo reports no "
+        "treasury shares for this period.",
+        {SHARES_ISSUED_LABEL},
+    )
+
+
 def normalize_statement(
     df: pd.DataFrame, statement: str, period: str
 ) -> NormalizedStatement:
@@ -140,6 +181,15 @@ def normalize_statement(
                 f"{end}: total_liabilities derived as total assets minus "
                 f"'{TOTAL_EQUITY_LABEL}'."
             )
+        if (
+            statement == "balance_sheet"
+            and values["shares_outstanding"] is None
+            and any(v is not None for v in values.values())
+        ):
+            shares, note, labels_used = _shares_outstanding(df, labels, col, end)
+            values["shares_outstanding"] = shares
+            used.update(labels_used)
+            notes.append(note)
         if any(v is not None for v in values.values()):
             periods.append(FiscalPeriodFields(end, values))
 

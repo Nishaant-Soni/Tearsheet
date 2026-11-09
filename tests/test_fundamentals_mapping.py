@@ -1,5 +1,6 @@
 import numpy as np
 import pandas as pd
+import pytest
 
 from tearsheet.data.fundamentals import LABELS, normalize_statement
 from tests.conftest import make_statement
@@ -66,3 +67,74 @@ def test_epoch_like_timestamp_columns():
     df = pd.DataFrame({col: [5.0]}, index=["Total Revenue"])
     ns = normalize_statement(df, "income_statement", "annual")
     assert ns.periods[0].period_end == "2024-12-31"
+
+
+# ---- addendum A3: share count fallback
+
+END = "2025-06-30"
+
+
+def shares(rows: dict) -> tuple[float | None, list[str], list[str]]:
+    df = make_statement({"Total Assets": [1_000.0], **rows}, [END])
+    ns = normalize_statement(df, "balance_sheet", "annual")
+    return ns.periods[0].fields["shares_outstanding"], ns.notes, ns.unmapped_labels
+
+
+def test_ordinary_shares_used_first():
+    value, notes, unmapped = shares(
+        {
+            "Ordinary Shares Number": [700.0],
+            "Share Issued": [1_000.0],
+            "Treasury Shares Number": [300.0],
+        }
+    )
+    assert value == 700.0 and notes == []
+    # Issued/treasury are not used here, so they stay visible as unmapped.
+    assert "Share Issued" in unmapped and "Treasury Shares Number" in unmapped
+
+
+def test_issued_minus_treasury_when_ordinary_missing():
+    value, notes, unmapped = shares(
+        {"Share Issued": [1_000.0], "Treasury Shares Number": [300.0]}
+    )
+    assert value == 700.0  # not the issued count
+    assert notes == [
+        f"{END}: shares_outstanding derived as shares issued minus treasury shares."
+    ]
+    assert "Share Issued" not in unmapped and "Treasury Shares Number" not in unmapped
+
+
+@pytest.mark.parametrize("treasury_rows", [{}, {"Treasury Shares Number": [np.nan]}])
+def test_issued_alone_when_no_treasury_reported(treasury_rows):
+    # Deviation from the addendum (which says None): Yahoo omits the treasury line for
+    # companies that hold no treasury shares, where issued == ordinary.
+    value, notes, _ = shares({"Share Issued": [1_000.0], **treasury_rows})
+    assert value == 1_000.0
+    assert notes == [
+        f"{END}: shares_outstanding taken from shares issued; Yahoo reports no treasury "
+        "shares for this period."
+    ]
+
+
+def test_no_share_count_is_none_with_note():
+    value, notes, _ = shares({"Treasury Shares Number": [300.0]})
+    assert value is None
+    assert notes == [
+        f"{END}: shares_outstanding not reported (no ordinary or issued share count)."
+    ]
+
+
+def test_book_value_per_share_uses_derived_count():
+    from tearsheet.analysis.ratios import STATEMENT_METRICS
+
+    df = make_statement(
+        {
+            "Stockholders Equity": [7_000.0],
+            "Share Issued": [1_000.0],
+            "Treasury Shares Number": [300.0],
+        },
+        [END],
+    )
+    fields = normalize_statement(df, "balance_sheet", "annual").periods[0].fields
+    # 7000 / 700 = 10.0; the old issued-count fallback gave 7000 / 1000 = 7.0.
+    assert STATEMENT_METRICS["book_value_per_share"](fields).value == 10.0
