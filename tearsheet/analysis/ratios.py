@@ -114,8 +114,39 @@ def fcf_margin(f: Fields) -> Ratio:
     return Ratio(_div(fcf.value, inputs["revenue"]), inputs, fcf.notes)
 
 
+# Ratios with equity in the denominator flip sign when equity is negative (common
+# after large buybacks, e.g. SBUX, MCD, BKNG), which reads as a loss or as negative
+# leverage. They are left undefined instead.
+NEGATIVE_EQUITY_METRICS = ("roe", "debt_to_equity", "liabilities_to_equity")
+
+
+def _over_equity(numerator: str, metric: str) -> Callable[[Fields], Ratio]:
+    def ratio(f: Fields) -> Ratio:
+        inputs = _pick(f, numerator, "stockholders_equity")
+        equity = inputs["stockholders_equity"]
+        if equity is not None and equity <= 0:
+            return Ratio(
+                None,
+                inputs,
+                [
+                    f"{metric}: undefined because stockholders' equity is zero or "
+                    f"negative ({equity:,.0f})."
+                ],
+            )
+        return Ratio(_div(inputs[numerator], equity), inputs)
+
+    return ratio
+
+
 def book_value_per_share(f: Fields) -> Ratio:
-    return _simple("stockholders_equity", "shares_outstanding")(f)
+    """Kept when negative: it is a factual figure, unlike the ratios above."""
+    r = _simple("stockholders_equity", "shares_outstanding")(f)
+    if r.value is not None and r.value < 0:
+        notes = [
+            "book_value_per_share is negative because stockholders' equity is negative."
+        ]
+        return Ratio(r.value, r.inputs, notes)
+    return r
 
 
 STATEMENT_METRICS: dict[str, Callable[[Fields], Ratio]] = {
@@ -123,14 +154,14 @@ STATEMENT_METRICS: dict[str, Callable[[Fields], Ratio]] = {
     "operating_margin": _simple("operating_income", "revenue"),
     "net_margin": _simple("net_income", "revenue"),
     "ebitda": ebitda,
-    "debt_to_equity": _simple("total_debt", "stockholders_equity"),
-    "liabilities_to_equity": _simple("total_liabilities", "stockholders_equity"),
+    "debt_to_equity": _over_equity("total_debt", "debt_to_equity"),
+    "liabilities_to_equity": _over_equity("total_liabilities", "liabilities_to_equity"),
     "current_ratio": _simple("current_assets", "current_liabilities"),
     "quick_ratio": quick_ratio,
     "free_cash_flow": free_cash_flow,
     "fcf_margin": fcf_margin,
     "operating_cash_flow_margin": _simple("operating_cash_flow", "revenue"),
-    "roe": _simple("net_income", "stockholders_equity"),
+    "roe": _over_equity("net_income", "roe"),
     "roa": _simple("net_income", "total_assets"),
     "book_value_per_share": book_value_per_share,
 }

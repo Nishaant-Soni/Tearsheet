@@ -296,6 +296,8 @@ async def get_fundamentals(
     liabilities_to_equity = total_liabilities / equity; free_cash_flow =
     operating_cash_flow - |capex|; roe and roa use period-end equity and assets.
     Quarterly periods give per-quarter (not annualized) margins and returns.
+    When stockholders' equity is <= 0, roe, debt_to_equity, liabilities_to_equity
+    and pb_ratio are null with a note; book_value_per_share stays negative.
 
     pe_ratio, pb_ratio and dividend_yield use the current price (as_of_price) and
     fill only the latest period. pe_ratio uses latest annual diluted EPS (TTM for

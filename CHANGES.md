@@ -250,6 +250,24 @@ Deviations from the addendum:
   2023 buy becomes 2023-02-01 (Q4's expected answer is GOOGL:2023-03-27). Q6's RSI is
   unchanged at 57.95. The recorded results are kept as measured.
 
+## Addendum A2: negative equity
+
+Companies with negative stockholders' equity after large buybacks got sign-flipped
+ratios: SBUX showed `roe` of -37.7%, -51.6%, -50.5% and -22.9% for FY2022 to FY2025
+although net income was positive every year, and `debt_to_equity` around -3.
+
+- `roe`, `debt_to_equity` and `liabilities_to_equity` are null when equity is <= 0,
+  with the note `"<metric>: undefined because stockholders' equity is zero or
+  negative (<value>)."` The inputs stay in `inputs_used`. `pb_ratio` already behaved
+  this way.
+- `book_value_per_share` keeps its negative value, with the note
+  `"book_value_per_share is negative because stockholders' equity is negative."`
+- ROA, margins and liquidity ratios are unchanged.
+- `tearsheet_plot_fundamental` draws null periods as "n/a" bars and puts the reason
+  in the text summary. When every period is null it raises an error stating the
+  reason; it used to say "Yahoo does not report the inputs", which was wrong for
+  negative equity.
+
 ## Regression coverage
 
 Each problem from the refactor spec has a test that fails on the original code. The
@@ -278,6 +296,8 @@ P4/P5 scenarios were re-run against commit `41f093a` to confirm the old behavior
 | Payload size (P6) | unbounded rows | `test_serialize.py::test_rows_truncated_flag_and_nan`, `test_retrieve_tools.py::test_price_history_rows_truncated` |
 | Blocking calls (P6) | sync tools on the event loop | `test_hygiene.py::test_yfinance_calls_run_off_the_event_loop`, `test_chart_rendering_runs_off_the_event_loop` |
 | Slow quote (P6) | `.info` for the currency | `test_market.py::test_quote_uses_fast_info_not_info` |
+| Negative equity (A2) | ROE -37.7% for profitable SBUX | `test_ratios.py::test_equity_ratios_undefined_for_non_positive_equity`, `test_negative_equity_tools.py` |
+| Cold-start MAs (A1) | first ~50 days missed | `test_warmup.py` |
 
 Tests run offline: yfinance is replaced by a fake and outbound sockets are refused.
 `uv run pytest -m live` runs four optional checks against Yahoo Finance.

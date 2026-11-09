@@ -185,7 +185,10 @@ async def plot_fundamental(
     Uses the same definitions as tearsheet_get_fundamentals (ratios as fractions,
     shown as percentages; ebitda and free_cash_flow in the reporting currency).
     Price-based ratios (pe_ratio, pb_ratio, dividend_yield) exist only for the
-    latest period and cannot be plotted. Returns the image plus the plotted values.
+    latest period and cannot be plotted. roe, debt_to_equity and
+    liabilities_to_equity are null when stockholders' equity is <= 0; null periods
+    are drawn as "n/a" bars and the summary gives the reason. Returns the image plus
+    the plotted values.
 
     Example: {"ticker": "MSFT", "metric": "free_cash_flow", "period": "annual"}
     """
@@ -194,10 +197,11 @@ async def plot_fundamental(
     points = [
         (end, num(values[metric], dp)) for end, values in reversed(data.table.periods)
     ]
+    reasons = [n for n in data.table.notes if n.startswith(metric)]
     if all(v is None for _, v in points):
         raise ToolError(
-            f"Yahoo does not report the inputs for {metric} for '{ticker}'. "
-            + " ".join(data.table.notes)
+            f"{metric} has no value in any period for '{ticker}'. "
+            + (" ".join(reasons) or "Yahoo does not report its inputs.")
         )
     unit = METRIC_UNITS[metric]
     png, path = await _render_and_save(
@@ -215,7 +219,10 @@ async def plot_fundamental(
         "amount": currency,
         "per_share": f"{currency} per share",
     }[unit]
-    text = f"{ticker} {metric} ({period}, {unit_text}): {listed}. Saved to {path}."
+    notes = "".join(f" {n}" for n in reasons)
+    text = (
+        f"{ticker} {metric} ({period}, {unit_text}): {listed}.{notes} Saved to {path}."
+    )
     return _respond(
         png,
         ChartResult(

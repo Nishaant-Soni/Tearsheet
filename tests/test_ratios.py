@@ -124,3 +124,57 @@ def test_null_metric_gets_missing_input_note():
 def test_every_metric_handles_empty_fields(name):
     t = r.compute_fundamentals([("2025", {})], [name], _market(price=None, eps=None))
     assert t.periods[0][1][name] is None
+
+
+# ---- addendum A2: negative equity
+
+NEGATIVE_EQUITY = {
+    "net_income": 3_000.0,
+    "revenue": 30_000.0,
+    "total_assets": 30_000.0,
+    "total_debt": 25_000.0,
+    "total_liabilities": 38_000.0,
+    "stockholders_equity": -8_000.0,
+    "shares_outstanding": 1_000.0,
+}
+
+
+@pytest.mark.parametrize("metric", ["roe", "debt_to_equity", "liabilities_to_equity"])
+@pytest.mark.parametrize("equity", [-8_000.0, 0.0])
+def test_equity_ratios_undefined_for_non_positive_equity(metric, equity):
+    out = r.STATEMENT_METRICS[metric](
+        {**NEGATIVE_EQUITY, "stockholders_equity": equity}
+    )
+    assert out.value is None
+    assert out.notes == [
+        f"{metric}: undefined because stockholders' equity is zero or negative "
+        f"({equity:,.0f})."
+    ]
+    assert out.inputs["stockholders_equity"] == equity  # kept for inputs_used
+
+
+def test_negative_book_value_per_share_is_kept_with_a_note():
+    out = r.STATEMENT_METRICS["book_value_per_share"](NEGATIVE_EQUITY)
+    assert out.value == -8.0
+    assert out.notes == [
+        "book_value_per_share is negative because stockholders' equity is negative."
+    ]
+    assert (
+        r.STATEMENT_METRICS["book_value_per_share"](
+            {**NEGATIVE_EQUITY, "stockholders_equity": 8_000.0}
+        ).notes
+        == []
+    )
+
+
+def test_roa_margins_and_liquidity_unaffected_by_negative_equity():
+    f = {**NEGATIVE_EQUITY, "current_assets": 5_000.0, "current_liabilities": 4_000.0}
+    assert r.STATEMENT_METRICS["roa"](f).value == 0.1
+    assert r.STATEMENT_METRICS["net_margin"](f).value == 0.1
+    assert r.STATEMENT_METRICS["current_ratio"](f).value == 1.25
+
+
+def test_positive_equity_ratios_unchanged():
+    f = {**NEGATIVE_EQUITY, "stockholders_equity": 10_000.0}
+    assert r.STATEMENT_METRICS["roe"](f).value == 0.3
+    assert r.STATEMENT_METRICS["debt_to_equity"](f).value == 2.5

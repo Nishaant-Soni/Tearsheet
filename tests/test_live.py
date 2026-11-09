@@ -59,3 +59,19 @@ async def test_fundamentals_eval_q8():
     )
     fy2025 = next(p for p in r["periods"] if p["period_end"].startswith("2025"))
     assert round(fy2025["metrics"]["debt_to_equity"], 2) == 1.34
+
+
+@pytest.mark.parametrize("ticker", ["SBUX", "MCD", "BKNG"])
+async def test_negative_equity_roe_is_null(ticker):
+    r = await call(
+        "tearsheet_get_fundamentals", {"ticker": ticker, "metrics": ["roe", "roa"]}
+    )
+    negative = [
+        p
+        for p in r["periods"]
+        if (r["inputs_used"][p["period_end"]].get("stockholders_equity") or 0) <= 0
+        and r["inputs_used"][p["period_end"]].get("stockholders_equity") is not None
+    ]
+    assert negative, f"{ticker} no longer reports negative equity; pick another ticker"
+    for p in negative:
+        assert p["metrics"]["roe"] is None
