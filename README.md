@@ -44,6 +44,7 @@ Plot tools return the image, a short text summary (file path, date range, last c
 
 ### Conventions
 - Ratios, margins, returns and growth rates are **fractions**: `0.25` means 25%.
+- Price-based ratios each use the **newest period that has their inputs**: P/E the newest diluted EPS, P/B the newest balance sheet, dividend yield the newest period. `as_of_price.applies_to` says which. A fiscal period that only some statements report yet (for example, EPS released before the balance sheet) gets a note, and fundamental charts leave such empty periods off either end of the series.
 - `roe`, `debt_to_equity`, `liabilities_to_equity` and `pb_ratio` are **null when stockholders' equity is zero or negative** (common after large buybacks, e.g. SBUX, MCD, BKNG), with a note giving the equity figure. `book_value_per_share` stays negative, and ROA and the margins are unaffected.
 - Dates are `YYYY-MM-DD`. `end_date` is **inclusive** and defaults to today.
 - Price history and indicators return a **summary** by default. Pass `response_format="rows"` for individual bars, capped at `max_rows` (default 100, max 1000). Longer series are evenly downsampled and flagged `truncated`.

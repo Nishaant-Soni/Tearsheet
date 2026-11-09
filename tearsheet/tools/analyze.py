@@ -300,8 +300,10 @@ async def get_fundamentals(
     and pb_ratio are null with a note; book_value_per_share stays negative.
 
     pe_ratio, pb_ratio and dividend_yield use the current price (as_of_price) and
-    fill only the latest period. pe_ratio uses latest annual diluted EPS (TTM for
-    quarterly) and is null when EPS <= 0. dividend_yield = trailing 12 months of
+    each fill one period, listed in as_of_price.applies_to: pe_ratio the newest with
+    diluted EPS (TTM of 4 quarters for quarterly; null when EPS <= 0), pb_ratio the
+    newest with equity and shares, dividend_yield the newest. Partially reported
+    periods carry a note. dividend_yield = trailing 12 months of
     dividends / price. inputs_used lists the inputs per period; notes explain
     fallbacks and nulls.
 
@@ -334,5 +336,5 @@ async def get_fundamentals(
             for end, used in table.inputs_used.items()
             if end in kept
         },
-        notes=[*data.notes, *table.notes],
+        notes=data.notes_for(kept),
     )

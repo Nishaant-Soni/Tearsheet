@@ -232,24 +232,67 @@ async def get_statement(
     return normalize_statement(df, statement, period)
 
 
+STATEMENT_NAMES = {
+    "income_statement": "the income statement",
+    "balance_sheet": "the balance sheet",
+    "cash_flow": "the cash flow statement",
+}
+
+
+@dataclass
+class MergedFields:
+    periods: list[tuple[str, dict[str, float | None]]]  # newest first
+    sources: dict[str, list[str]]  # period end -> statements that reported it
+    statements: list[str]  # statements requested
+    notes: list[str]  # statement-level notes (derived fields)
+
+    def partial_notes(self) -> dict[str, str]:
+        """Period end -> note, for periods missing from any requested statement.
+
+        Periods newer than the newest complete one are "reported so far" (filing in
+        progress); older ones have aged out of a statement's Yahoo window.
+        """
+        complete = [
+            e for e, _ in self.periods if len(self.sources[e]) == len(self.statements)
+        ]
+        newest_complete = complete[0] if complete else None
+        out = {}
+        for end, _ in self.periods:
+            present = self.sources[end]
+            if len(present) == len(self.statements):
+                continue
+            names = " and ".join(STATEMENT_NAMES[s] for s in present)
+            if newest_complete is None or end > newest_complete:
+                where = "reported so far"
+            else:
+                where = "available from Yahoo for this period"
+            out[end] = (
+                f"{end}: only {names} {where}; metrics needing other statements are null."
+            )
+        return out
+
+
 async def get_merged_fields(
     ticker: str, period: str, statements: list[str]
-) -> tuple[list[tuple[str, dict[str, float | None]]], list[str]]:
+) -> MergedFields:
     """Canonical fields from several statements merged by period end, newest first.
 
-    Returns (periods, notes). Statements are fetched concurrently.
+    Statements are fetched concurrently. `sources` records which statements reported
+    each period end, so partially reported periods can be explained.
     """
     normalized: list[NormalizedStatement] = await gather(
         *(partial(get_statement, ticker, st, period) for st in statements)
     )
     merged: dict[str, dict[str, float | None]] = {}
+    sources: dict[str, list[str]] = {}
     notes: list[str] = []
     for ns in normalized:
         notes.extend(ns.notes)
         for p in ns.periods:
             merged.setdefault(p.period_end, {}).update(p.fields)
+            sources.setdefault(p.period_end, []).append(ns.statement)
     ordered = sorted(merged.items(), key=lambda kv: kv[0], reverse=True)
-    return ordered, notes
+    return MergedFields(ordered, sources, list(statements), notes)
 
 
 async def get_financial_currency(ticker: str) -> str | None:

@@ -176,6 +176,13 @@ async def plot_comparison(
     )
 
 
+def _reasons(data, metric: str, ends: list[str]) -> list[str]:
+    """Partial-period notes and this metric's notes, for the periods in `ends`."""
+    partial_notes = [data.partial[e] for e in ends if e in data.partial]
+    metric_notes = [n for n in data.table.notes_for(set(ends)) if n.startswith(metric)]
+    return [*partial_notes, *metric_notes]
+
+
 @mcp.tool(name="tearsheet_plot_fundamental", annotations=PLOT_LOCAL_WRITE)
 async def plot_fundamental(
     ticker: Ticker, metric: PlotMetric, period: Period = "annual"
@@ -186,23 +193,32 @@ async def plot_fundamental(
     shown as percentages; ebitda and free_cash_flow in the reporting currency).
     Price-based ratios (pe_ratio, pb_ratio, dividend_yield) exist only for the
     latest period and cannot be plotted. roe, debt_to_equity and
-    liabilities_to_equity are null when stockholders' equity is <= 0; null periods
-    are drawn as "n/a" bars and the summary gives the reason. Returns the image plus
-    the plotted values.
+    liabilities_to_equity are null when stockholders' equity is <= 0. Null periods
+    in the middle of the series are drawn as "n/a" bars; null periods at either end
+    (e.g. a fiscal year only partly reported) are left out. The summary gives the
+    reasons. Returns the image plus the plotted values.
 
     Example: {"ticker": "MSFT", "metric": "free_cash_flow", "period": "annual"}
     """
     data = await load_fundamentals(ticker, period, [metric])
     dp = 0 if metric in CURRENCY_METRICS else RATIO_DP
-    points = [
+    all_points = [
         (end, num(values[metric], dp)) for end, values in reversed(data.table.periods)
     ]
-    reasons = [n for n in data.table.notes if n.startswith(metric)]
-    if all(v is None for _, v in points):
+    if all(v is None for _, v in all_points):
         raise ToolError(
             f"{metric} has no value in any period for '{ticker}'. "
-            + (" ".join(reasons) or "Yahoo does not report its inputs.")
+            + (
+                " ".join(_reasons(data, metric, [e for e, _ in all_points]))
+                or "Yahoo does not report its inputs."
+            )
         )
+    # Trim null periods at either end (e.g. a fiscal year only partly reported so
+    # far); nulls in the middle stay as "n/a" bars so gaps remain visible.
+    have = [i for i, (_, v) in enumerate(all_points) if v is not None]
+    points = all_points[have[0] : have[-1] + 1]
+    omitted = [e for e, _ in all_points[: have[0]] + all_points[have[-1] + 1 :]]
+    reasons = _reasons(data, metric, [e for e, _ in points])
     unit = METRIC_UNITS[metric]
     png, path = await _render_and_save(
         partial(charts.fundamental_chart, points, ticker, metric, unit, data.currency),
@@ -220,6 +236,11 @@ async def plot_fundamental(
         "per_share": f"{currency} per share",
     }[unit]
     notes = "".join(f" {n}" for n in reasons)
+    if omitted:
+        why = " ".join(_reasons(data, metric, omitted))
+        notes += f" Not plotted, no {metric} value: {', '.join(omitted)}." + (
+            f" {why}" if why else ""
+        )
     text = (
         f"{ticker} {metric} ({period}, {unit_text}): {listed}.{notes} Saved to {path}."
     )

@@ -251,8 +251,7 @@ CURRENCY_METRICS = {"ebitda", "free_cash_flow"}
 @dataclass(frozen=True)
 class MarketInputs:
     price: float | None
-    eps: float | None  # latest annual diluted EPS, or TTM sum for quarterly
-    eps_note: str | None
+    period: str  # "annual" or "quarterly", for the EPS used by pe_ratio
     ttm_dividends: float | None
     currency_mismatch: str | None  # message when quote and reporting currency differ
 
@@ -261,25 +260,57 @@ class MarketInputs:
 class FundamentalsTable:
     periods: list[tuple[str, dict[str, float | None]]]  # newest first
     inputs_used: dict[str, dict[str, float | None]]
-    notes: list[str]
+    note_periods: dict[str, list[str]]  # note text -> period ends it applies to
+    applies_to: dict[str, str] = field(default_factory=dict)  # market metric -> period
+
+    @property
+    def notes(self) -> list[str]:
+        return self.notes_for({end for end, _ in self.periods})
+
+    def notes_for(self, keep: set[str]) -> list[str]:
+        """Notes for the periods in `keep`, naming periods unless all of them apply."""
+        out = []
+        for text, ends in self.note_periods.items():
+            kept = [e for e in ends if e in keep]
+            if not kept:
+                continue
+            named = all(e in text for e in kept)  # the note already says which period
+            out.append(
+                text
+                if named or len(kept) == len(keep)
+                else f"{text} (periods: {', '.join(kept)})"
+            )
+        return out
 
 
-def ttm_eps(
+def pe_eps(
     periods: list[tuple[str, Fields]], period: str
-) -> tuple[float | None, str | None]:
-    """EPS for P/E: latest annual diluted EPS, or the sum of the last 4 quarters."""
+) -> tuple[int | None, float | None, str | None]:
+    """(period index, EPS, note) for P/E: the newest annual diluted EPS, or TTM EPS
+    from 4 consecutive quarters ending at the newest quarter that reports EPS."""
     eps = [f.get("diluted_eps") for _, f in periods]
+    first = next((i for i, e in enumerate(eps) if e is not None), None)
+    if first is None:
+        return None, None, None
     if period == "annual":
-        return (eps[0] if eps else None), None
-    last4 = [e for e in eps[:4] if e is not None]
-    if len(last4) < 4:
+        return first, eps[first], None
+    window = eps[first : first + 4]
+    if len(window) < 4 or any(e is None for e in window):
         return (
+            first,
             None,
-            "pe_ratio: fewer than 4 quarters of diluted EPS, cannot form TTM EPS.",
+            (
+                "pe_ratio: fewer than 4 consecutive quarters of diluted EPS, cannot form "
+                "TTM EPS."
+            ),
         )
-    return sum(
-        last4
-    ), "pe_ratio uses trailing-twelve-month EPS (sum of last 4 quarters)."
+    return (
+        first,
+        sum(window),
+        (
+            f"pe_ratio uses trailing-twelve-month EPS (4 quarters ending {periods[first][0]})."
+        ),
+    )
 
 
 def compute_fundamentals(
@@ -287,15 +318,52 @@ def compute_fundamentals(
     metrics: list[str],
     market: MarketInputs | None,
 ) -> FundamentalsTable:
-    """Evaluate `metrics` for every period. Market metrics fill the latest period only."""
-    notes_by_text: dict[str, list[str]] = {}
+    """Evaluate `metrics` for every period.
+
+    Each market metric fills one period: pe_ratio the newest period with diluted EPS,
+    pb_ratio the newest with equity and a share count, dividend_yield the newest
+    period. A partially reported newest period (e.g. EPS released before the balance
+    sheet) therefore does not blank out P/B.
+    """
+    note_periods: dict[str, list[str]] = {}
     rows: list[tuple[str, dict[str, float | None]]] = []
     inputs_used: dict[str, dict[str, float | None]] = {}
 
     def note(text: str, period_end: str) -> None:
-        ends = notes_by_text.setdefault(text, [])
+        ends = note_periods.setdefault(text, [])
         if period_end not in ends:
             ends.append(period_end)
+
+    targets: dict[str, int] = {}
+    eps_value, eps_note = None, None
+    if market is not None and periods:
+        pe_index, eps_value, eps_note = pe_eps(periods, market.period)
+        pb_index = next(
+            (
+                i
+                for i, (_, f) in enumerate(periods)
+                if f.get("stockholders_equity") is not None
+                and f.get("shares_outstanding") is not None
+            ),
+            None,
+        )
+        targets = {
+            "pe_ratio": pe_index if pe_index is not None else 0,
+            "pb_ratio": pb_index if pb_index is not None else 0,
+            "dividend_yield": 0,
+        }
+        if pe_index and "pe_ratio" in metrics:
+            note(
+                f"pe_ratio uses {periods[pe_index][0]}, the newest period that reports "
+                "diluted EPS.",
+                periods[pe_index][0],
+            )
+        if pb_index and "pb_ratio" in metrics:
+            note(
+                f"pb_ratio uses {periods[pb_index][0]}, the newest period with "
+                "stockholders' equity and shares outstanding.",
+                periods[pb_index][0],
+            )
 
     for i, (period_end, f) in enumerate(periods):
         values: dict[str, float | None] = {}
@@ -303,7 +371,7 @@ def compute_fundamentals(
         for m in metrics:
             if m in STATEMENT_METRICS:
                 r = STATEMENT_METRICS[m](f)
-            elif i > 0 or market is None:
+            elif market is None or targets.get(m) != i:
                 values[m] = None
                 continue
             elif market.currency_mismatch and m in ("pe_ratio", "pb_ratio"):
@@ -311,9 +379,9 @@ def compute_fundamentals(
                 note(market.currency_mismatch, period_end)
                 continue
             elif m == "pe_ratio":
-                r = pe_ratio(market.price, market.eps)
-                if market.eps_note:
-                    note(market.eps_note, period_end)
+                r = pe_ratio(market.price, eps_value)
+                if eps_note:
+                    note(eps_note, period_end)
             elif m == "pb_ratio":
                 r = pb_ratio(market.price, f)
             else:
@@ -330,8 +398,7 @@ def compute_fundamentals(
         rows.append((period_end, values))
         inputs_used[period_end] = used
 
-    notes = [
-        text if len(ends) == len(periods) else f"{text} (periods: {', '.join(ends)})"
-        for text, ends in notes_by_text.items()
-    ]
-    return FundamentalsTable(rows, inputs_used, notes)
+    applies_to = {
+        m: periods[targets[m]][0] for m in metrics if m in targets and periods
+    }
+    return FundamentalsTable(rows, inputs_used, note_periods, applies_to)

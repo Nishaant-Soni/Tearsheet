@@ -78,37 +78,54 @@ def test_dividend_yield():
     assert r.dividend_yield(50.0, 1.0).value == 0.02
 
 
-def test_ttm_eps():
+def test_pe_eps_annual_and_ttm():
     periods = [("q4", {"diluted_eps": 1.0}), ("q3", {"diluted_eps": 0.5})] * 2
-    assert r.ttm_eps(periods, "quarterly")[0] == 3.0
-    assert r.ttm_eps(periods[:3], "quarterly")[0] is None
-    assert r.ttm_eps(periods, "annual") == (1.0, None)
+    assert r.pe_eps(periods, "quarterly")[:2] == (0, 3.0)
+    assert r.pe_eps(periods[:3], "quarterly")[1] is None
+    assert r.pe_eps(periods, "annual") == (0, 1.0, None)
+    assert r.pe_eps([("x", {})], "annual") == (None, None, None)
+
+
+def test_pe_eps_skips_newest_periods_without_eps():
+    periods = [
+        ("2026", {}),
+        ("2025", {"diluted_eps": 2.0}),
+        ("2024", {"diluted_eps": 1.0}),
+    ]
+    assert r.pe_eps(periods, "annual") == (1, 2.0, None)
+    # TTM needs 4 consecutive quarters ending at the newest one with EPS.
+    q = [("q5", {})] + [(f"q{i}", {"diluted_eps": 0.5}) for i in (4, 3, 2, 1)]
+    assert r.pe_eps(q, "quarterly")[:2] == (1, 2.0)
 
 
 def _market(**kw):
-    base = dict(
-        price=40.0, eps=2.0, eps_note=None, ttm_dividends=1.0, currency_mismatch=None
-    )
+    base = dict(price=40.0, period="annual", ttm_dividends=1.0, currency_mismatch=None)
     return r.MarketInputs(**{**base, **kw})
 
 
+FULL = {"diluted_eps": 2.0, "stockholders_equity": 2000.0, "shares_outstanding": 100.0}
+
+
 def test_market_metrics_fill_latest_period_only():
-    periods = [
-        ("2025", {"stockholders_equity": 2000.0, "shares_outstanding": 100.0}),
-        ("2024", {"stockholders_equity": 1500.0, "shares_outstanding": 100.0}),
-    ]
+    periods = [("2025", FULL), ("2024", {**FULL, "stockholders_equity": 1500.0})]
     t = r.compute_fundamentals(
         periods, ["pe_ratio", "pb_ratio", "dividend_yield"], _market()
     )
     latest, older = t.periods[0][1], t.periods[1][1]
     assert latest == {"pe_ratio": 20.0, "pb_ratio": 2.0, "dividend_yield": 0.025}
     assert older == {"pe_ratio": None, "pb_ratio": None, "dividend_yield": None}
+    assert t.applies_to == {
+        "pe_ratio": "2025",
+        "pb_ratio": "2025",
+        "dividend_yield": "2025",
+    }
 
 
 def test_currency_mismatch_skips_pe_pb():
-    periods = [("2025", {"stockholders_equity": 2000.0, "shares_outstanding": 100.0})]
     t = r.compute_fundamentals(
-        periods, ["pe_ratio", "pb_ratio"], _market(currency_mismatch="TWD vs USD")
+        [("2025", FULL)],
+        ["pe_ratio", "pb_ratio"],
+        _market(currency_mismatch="TWD vs USD"),
     )
     assert t.periods[0][1] == {"pe_ratio": None, "pb_ratio": None}
     assert t.notes == ["TWD vs USD"]
@@ -122,7 +139,7 @@ def test_null_metric_gets_missing_input_note():
 
 @pytest.mark.parametrize("name", r.ALL_METRICS)
 def test_every_metric_handles_empty_fields(name):
-    t = r.compute_fundamentals([("2025", {})], [name], _market(price=None, eps=None))
+    t = r.compute_fundamentals([("2025", {})], [name], _market(price=None))
     assert t.periods[0][1][name] is None
 
 
@@ -178,3 +195,44 @@ def test_positive_equity_ratios_unchanged():
     f = {**NEGATIVE_EQUITY, "stockholders_equity": 10_000.0}
     assert r.STATEMENT_METRICS["roe"](f).value == 0.3
     assert r.STATEMENT_METRICS["debt_to_equity"](f).value == 2.5
+
+
+# ---- addendum A5: market ratios use the newest period that has their inputs
+
+
+def test_partial_newest_period_does_not_blank_pb():
+    # Like SBUX FY2026: EPS released, balance sheet not yet.
+    periods = [
+        ("2026", {"diluted_eps": 2.5}),
+        (
+            "2025",
+            {
+                "diluted_eps": 2.0,
+                "stockholders_equity": 2000.0,
+                "shares_outstanding": 100.0,
+            },
+        ),
+    ]
+    t = r.compute_fundamentals(
+        periods, ["pe_ratio", "pb_ratio", "dividend_yield"], _market()
+    )
+    newest, prior = t.periods[0][1], t.periods[1][1]
+    assert newest == {"pe_ratio": 16.0, "pb_ratio": None, "dividend_yield": 0.025}
+    assert prior == {"pe_ratio": None, "pb_ratio": 2.0, "dividend_yield": None}
+    assert t.applies_to == {
+        "pe_ratio": "2026",
+        "pb_ratio": "2025",
+        "dividend_yield": "2026",
+    }
+    assert any(n.startswith("pb_ratio uses 2025, the newest period") for n in t.notes)
+
+
+def test_notes_for_filters_to_kept_periods():
+    periods = [("2026", {"revenue": 1.0}), ("2025", {})]
+    t = r.compute_fundamentals(periods, ["gross_margin", "net_margin"], None)
+    only_2025 = [text for text, ends in t.note_periods.items() if "2025" in ends]
+    assert (
+        only_2025 and t.notes_for({"2025"}) == only_2025
+    )  # no suffix: one period kept
+    assert t.notes_for(set()) == []
+    assert any(n.endswith("(periods: 2026)") for n in t.notes)

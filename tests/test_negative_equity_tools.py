@@ -79,10 +79,23 @@ async def test_plot_shows_null_periods_with_the_reason(buyback, chart_dir):
     r = await call("tearsheet_plot_fundamental", {"ticker": "BUYBK", "metric": "roe"})
     assert not r.is_error, r.content[0].text
     out = r.structured_content
-    assert [v["value"] for v in out["metric_values"]] == [1.25, None, None]
+    # The two newest years are null at the end of the series, so A5 trims them.
+    assert [v["value"] for v in out["metric_values"]] == [1.25]
+    assert "Not plotted, no roe value: 2024-09-30, 2025-09-30." in out["summary"]
     assert (
         "undefined because stockholders' equity is zero or negative" in out["summary"]
     )
+
+
+@pytest.mark.anyio
+async def test_plot_keeps_middle_null_as_na(buyback, fake_yahoo):
+    bs = fake_yahoo.symbols["BUYBK"].statements["balance_sheet"]
+    bs.loc["Stockholders Equity"] = [2_400.0, -1_000.0, 2_000.0]  # middle year negative
+    r = await call("tearsheet_plot_fundamental", {"ticker": "BUYBK", "metric": "roe"})
+    out = r.structured_content
+    assert [v["value"] for v in out["metric_values"]] == [1.25, None, 1.25]
+    assert "Not plotted" not in out["summary"]
+    assert "(-1,000)" in out["summary"]
 
 
 @pytest.mark.anyio

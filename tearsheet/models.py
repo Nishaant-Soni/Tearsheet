@@ -306,7 +306,13 @@ class AsOfPrice(BaseModel):
     currency: str | None
     fetched_at: str
     applies_to_period_end: str | None = Field(
-        description="Market-based ratios are computed for this (latest) period only."
+        description="Newest period a market-based ratio was computed for."
+    )
+    applies_to: dict[str, str] = Field(
+        default_factory=dict,
+        description="Market-based ratio -> the single period it is computed for: "
+        "pe_ratio the newest with diluted EPS, pb_ratio the newest with equity and "
+        "shares, dividend_yield the newest period.",
     )
 
 

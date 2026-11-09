@@ -309,6 +309,38 @@ per-key locks were never removed, so a long-running server grew without bound.
   evicted first.
 - Concurrent requests for the same key still share one upstream fetch.
 
+## Addendum A5: partially reported periods
+
+A fiscal period can appear in one statement before the others: SBUX's FY2026 column
+exists only in the income statement, with just diluted EPS and diluted shares (from
+the earnings release). It showed up as an unexplained "n/a" bar, and it pushed P/B
+onto a period with no balance sheet.
+
+- `get_merged_fields` records which statements reported each period end. A period
+  missing from any requested statement gets the note `"<period_end>: only <statements>
+  reported so far; metrics needing other statements are null."`
+- `tearsheet_get_fundamentals` still drops periods where every requested metric is
+  null, and now only returns notes about the periods it keeps.
+- `tearsheet_plot_fundamental` leaves null periods off both ends of the series and
+  names them, with the reason, in the summary. Nulls in the middle stay as "n/a" bars.
+
+Deviations and additions:
+
+- **Older periods use different wording.** A period older than every complete one
+  has aged out of a statement's Yahoo window rather than being "reported so far", so
+  its note reads `"<period_end>: only <statements> available from Yahoo for this
+  period; ..."`.
+- **Price-based ratios pick their own period.** `pe_ratio` uses the newest period with
+  diluted EPS (TTM: 4 consecutive quarters ending there), `pb_ratio` the newest with
+  equity and a share count, `dividend_yield` the newest period. Previously all three
+  went on the newest period, so SBUX's P/B read "not reported" instead of "undefined
+  because book value per share <= 0". A single "latest complete period" rule was
+  rejected because it would have used stale FY2025 EPS for SBUX's P/E. The new
+  `as_of_price.applies_to` maps each ratio to its period, and a note says when it is
+  not the newest. `applies_to_period_end` is the newest of those periods.
+- **Notes that already name their period** no longer repeat it in a
+  `(periods: ...)` suffix.
+
 ## Regression coverage
 
 Each problem from the refactor spec has a test that fails on the original code. The
@@ -340,6 +372,7 @@ P4/P5 scenarios were re-run against commit `41f093a` to confirm the old behavior
 | Negative equity (A2) | ROE -37.7% for profitable SBUX | `test_ratios.py::test_equity_ratios_undefined_for_non_positive_equity`, `test_negative_equity_tools.py` |
 | Cold-start MAs (A1) | first ~50 days missed | `test_warmup.py` |
 | Share count (A3) | issued shares incl. treasury | `test_fundamentals_mapping.py::test_issued_minus_treasury_when_ordinary_missing` |
+| Partial periods (A5) | unexplained n/a bars, P/B on a period with no balance sheet | `test_partial_periods.py` |
 | Cache growth (A4) | expired entries and locks kept forever | `test_cache.py::test_expired_entries_are_swept_on_next_set`, `test_locks_do_not_outgrow_live_keys`, `test_max_entries_evicts_closest_to_expiry` |
 
 Tests run offline: yfinance is replaced by a fake and outbound sockets are refused.
