@@ -163,11 +163,40 @@ def test_equity_ratios_undefined_for_non_positive_equity(metric, equity):
         {**NEGATIVE_EQUITY, "stockholders_equity": equity}
     )
     assert out.value is None
-    assert out.notes == [
-        f"{metric}: undefined because stockholders' equity is zero or negative "
-        f"({equity:,.0f})."
-    ]
+    text = f"{metric}: undefined because stockholders' equity is zero or negative."
+    assert out.notes == [text] and out.note_values == {text: equity}
     assert out.inputs["stockholders_equity"] == equity  # kept for inputs_used
+
+
+def test_negative_equity_note_is_one_line_with_the_range():
+    equities = [
+        (2025, -8.0966e9),
+        (2024, -7.4489e9),
+        (2023, -7.9948e9),
+        (2022, -8.7066e9),
+    ]
+    periods = [
+        (str(year), {**NEGATIVE_EQUITY, "stockholders_equity": equity})
+        for year, equity in equities
+    ]
+    t = r.compute_fundamentals(periods, ["roe"], None)
+    assert t.notes == [
+        "roe: undefined because stockholders' equity is zero or negative "
+        "(-8.7B to -7.4B)."
+    ]
+    # Filtering to fewer periods narrows the range and names them.
+    assert t.notes_for({"2025", "2024", "2021"}) == [
+        "roe: undefined because stockholders' equity is zero or negative "
+        "(-8.1B to -7.4B). (periods: 2025, 2024)"
+    ]
+
+
+@pytest.mark.parametrize(
+    "value, text",
+    [(-8.0966e9, "-8.1B"), (1.7e12, "1.7T"), (-2.5e6, "-2.5M"), (-8000.0, "-8,000")],
+)
+def test_compact(value, text):
+    assert r.compact(value) == text
 
 
 def test_negative_book_value_per_share_is_kept_with_a_note():

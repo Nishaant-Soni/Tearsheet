@@ -17,6 +17,16 @@ class Ratio:
     value: float | None
     inputs: dict[str, float | None]
     notes: list[str] = field(default_factory=list)
+    # note text -> the figure it refers to, shown as one range across periods
+    note_values: dict[str, float] = field(default_factory=dict)
+
+
+def compact(value: float) -> str:
+    """-8,096,600,000 -> -8.1B; small figures keep thousands separators."""
+    for divisor, suffix in ((1e12, "T"), (1e9, "B"), (1e6, "M")):
+        if abs(value) >= divisor:
+            return f"{value / divisor:.1f}{suffix}"
+    return f"{value:,.0f}"
 
 
 def _div(num: float | None, den: float | None) -> float | None:
@@ -125,14 +135,10 @@ def _over_equity(numerator: str, metric: str) -> Callable[[Fields], Ratio]:
         inputs = _pick(f, numerator, "stockholders_equity")
         equity = inputs["stockholders_equity"]
         if equity is not None and equity <= 0:
-            return Ratio(
-                None,
-                inputs,
-                [
-                    f"{metric}: undefined because stockholders' equity is zero or "
-                    f"negative ({equity:,.0f})."
-                ],
+            text = (
+                f"{metric}: undefined because stockholders' equity is zero or negative."
             )
+            return Ratio(None, inputs, [text], {text: equity})
         return Ratio(_div(inputs[numerator], equity), inputs)
 
     return ratio
@@ -262,6 +268,8 @@ class FundamentalsTable:
     inputs_used: dict[str, dict[str, float | None]]
     note_periods: dict[str, list[str]]  # note text -> period ends it applies to
     applies_to: dict[str, str] = field(default_factory=dict)  # market metric -> period
+    # note text -> {period end: figure}, rendered as "(min to max)" for kept periods
+    note_values: dict[str, dict[str, float]] = field(default_factory=dict)
 
     @property
     def notes(self) -> list[str]:
@@ -275,6 +283,11 @@ class FundamentalsTable:
             if not kept:
                 continue
             named = all(e in text for e in kept)  # the note already says which period
+            values = [v for e, v in self.note_values.get(text, {}).items() if e in kept]
+            if values:
+                lo, hi = min(values), max(values)
+                span = compact(lo) if lo == hi else f"{compact(lo)} to {compact(hi)}"
+                text = f"{text.removesuffix('.')} ({span})."
             out.append(
                 text
                 if named or len(kept) == len(keep)
@@ -347,6 +360,7 @@ def compute_fundamentals(
     treats every period as fully reported.
     """
     note_periods: dict[str, list[str]] = {}
+    note_values: dict[str, dict[str, float]] = {}
     rows: list[tuple[str, dict[str, float | None]]] = []
     inputs_used: dict[str, dict[str, float | None]] = {}
 
@@ -424,6 +438,8 @@ def compute_fundamentals(
             used.update(r.inputs)
             for text in r.notes:
                 note(text, period_end)
+            for text, value in r.note_values.items():
+                note_values.setdefault(text, {})[period_end] = value
             missing = [k for k, v in r.inputs.items() if v is None]
             if r.value is None and not r.notes and missing:
                 note(
@@ -435,4 +451,4 @@ def compute_fundamentals(
     applies_to = {
         m: periods[targets[m]][0] for m in metrics if m in targets and periods
     }
-    return FundamentalsTable(rows, inputs_used, note_periods, applies_to)
+    return FundamentalsTable(rows, inputs_used, note_periods, applies_to, note_values)

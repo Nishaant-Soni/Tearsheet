@@ -371,6 +371,13 @@ Deviations and additions:
     partly reported (diluted_eps, diluted_shares only); revenue and net_income
     missing."`
 
+- **Negative-equity notes are one line per metric.** The addendum's note put the
+  equity figure in the text, so SBUX got four `roe` lines and four `debt_to_equity`
+  lines, one per year. The note is now `"roe: undefined because stockholders' equity
+  is zero or negative (-8.7B to -7.4B)."`, with the range covering the periods in the
+  response (and a `(periods: ...)` suffix when not all of them). Each year's exact
+  figure stays in `inputs_used`.
+
 ## Regression coverage
 
 Each problem from the refactor spec has a test that fails on the original code. The

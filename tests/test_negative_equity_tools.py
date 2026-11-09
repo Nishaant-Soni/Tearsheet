@@ -68,8 +68,8 @@ async def test_fundamentals_null_equity_ratios_with_notes(buyback):
     )
     assert out["inputs_used"]["2025-09-30"]["stockholders_equity"] == -8_000.0
     assert (
-        "roe: undefined because stockholders' equity is zero or negative (-8,000). (periods: 2025-09-30)"
-        in out["notes"]
+        "roe: undefined because stockholders' equity is zero or negative "
+        "(-8,000 to -1,000). (periods: 2025-09-30, 2024-09-30)" in out["notes"]
     )
     assert any(n.startswith("book_value_per_share is negative") for n in out["notes"])
 
