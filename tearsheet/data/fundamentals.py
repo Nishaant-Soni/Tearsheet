@@ -65,6 +65,8 @@ FIELD_STATEMENT = {f: st for st, fields in LABELS.items() for f in fields}
 TOTAL_EQUITY_LABEL = "Total Equity Gross Minority Interest"
 SHARES_ISSUED_LABEL = "Share Issued"  # includes treasury shares
 TREASURY_SHARES_LABEL = "Treasury Shares Number"
+# Read only by fallbacks, but known: never reported as unmapped, used or not.
+FALLBACK_LABELS = (TOTAL_EQUITY_LABEL, SHARES_ISSUED_LABEL, TREASURY_SHARES_LABEL)
 
 _ATTRS = {
     ("income_statement", "annual"): "financials",
@@ -114,8 +116,8 @@ def _first(
 
 def _shares_outstanding(
     df: pd.DataFrame, labels: list[str], col, end: str
-) -> tuple[float | None, str | None, set[str]]:
-    """Fallback when "Ordinary Shares Number" is missing: (value, note, labels used).
+) -> tuple[float | None, str]:
+    """Fallback when "Ordinary Shares Number" is missing: (value, note).
 
     "Share Issued" counts treasury shares, so subtract them when Yahoo reports them.
     Yahoo omits the treasury line for companies that hold none (they retire bought-
@@ -134,19 +136,16 @@ def _shares_outstanding(
         return (
             None,
             f"{end}: shares_outstanding not reported (no ordinary or issued share count).",
-            set(),
         )
     if treasury is not None:
         return (
             num(issued - abs(treasury)),
             f"{end}: shares_outstanding derived as shares issued minus treasury shares.",
-            {SHARES_ISSUED_LABEL, TREASURY_SHARES_LABEL},
         )
     return (
         issued,
         f"{end}: shares_outstanding taken from shares issued; Yahoo reports no "
         "treasury shares for this period.",
-        {SHARES_ISSUED_LABEL},
     )
 
 
@@ -159,6 +158,7 @@ def normalize_statement(
     used: set[str] = set()
     for candidates in mapping.values():
         used.update(c for c in candidates if c in labels)
+    used.update(label for label in FALLBACK_LABELS if label in labels)
 
     cols = sorted(df.columns, key=pd.Timestamp, reverse=True)
     periods: list[FiscalPeriodFields] = []
@@ -176,7 +176,6 @@ def normalize_statement(
             and (equity := _value(df, TOTAL_EQUITY_LABEL, col)) is not None
         ):
             values["total_liabilities"] = num(values["total_assets"] - equity)
-            used.add(TOTAL_EQUITY_LABEL)
             notes.append(
                 f"{end}: total_liabilities derived as total assets minus "
                 f"'{TOTAL_EQUITY_LABEL}'."
@@ -186,9 +185,8 @@ def normalize_statement(
             and values["shares_outstanding"] is None
             and any(v is not None for v in values.values())
         ):
-            shares, note, labels_used = _shares_outstanding(df, labels, col, end)
+            shares, note = _shares_outstanding(df, labels, col, end)
             values["shares_outstanding"] = shares
-            used.update(labels_used)
             notes.append(note)
         if any(v is not None for v in values.values()):
             periods.append(FiscalPeriodFields(end, values))

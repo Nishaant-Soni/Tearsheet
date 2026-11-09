@@ -276,8 +276,13 @@ book value per share and P/B were understated whenever the fallback was used.
 - Fallback order: `"Ordinary Shares Number"`, then `"Share Issued"` minus `"Treasury
   Shares Number"` (note: `"<period>: shares_outstanding derived as shares issued minus
   treasury shares."`), then the deviation below, then `None` with a note.
-- `"Share Issued"` and `"Treasury Shares Number"` count as mapped only when the
-  fallback uses them; otherwise they appear in `unmapped_labels`.
+- **Fallback labels are never listed in `unmapped_labels`.** `"Share Issued"`,
+  `"Treasury Shares Number"` and `"Total Equity Gross Minority Interest"` are read by
+  the share-count and total-liabilities fallbacks, so they are known labels whether or
+  not a given period needs them. `unmapped_labels` lists only labels the server has
+  no use for, which is what it is meant to surface. Compared with before A3,
+  `"Treasury Shares Number"` and `"Total Equity Gross Minority Interest"` no longer
+  appear there (they did when unused); `"Share Issued"` stays hidden as before.
 - Checked on AAPL, MSFT, SBUX, KO, JPM, NVDA, TSLA, MCD, BKNG, TSM, BRK-B and XOM:
   issued equals ordinary plus treasury in every case, and all twelve report
   `"Ordinary Shares Number"`, so their share counts are unchanged.

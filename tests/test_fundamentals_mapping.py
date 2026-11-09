@@ -89,8 +89,8 @@ def test_ordinary_shares_used_first():
         }
     )
     assert value == 700.0 and notes == []
-    # Issued/treasury are not used here, so they stay visible as unmapped.
-    assert "Share Issued" in unmapped and "Treasury Shares Number" in unmapped
+    # Known fallback labels are never reported as unmapped, even when unused.
+    assert "Share Issued" not in unmapped and "Treasury Shares Number" not in unmapped
 
 
 def test_issued_minus_treasury_when_ordinary_missing():
@@ -138,3 +138,23 @@ def test_book_value_per_share_uses_derived_count():
     fields = normalize_statement(df, "balance_sheet", "annual").periods[0].fields
     # 7000 / 700 = 10.0; the old issued-count fallback gave 7000 / 1000 = 7.0.
     assert STATEMENT_METRICS["book_value_per_share"](fields).value == 10.0
+
+
+def test_fallback_labels_never_listed_as_unmapped():
+    df = make_statement(
+        {
+            "Total Assets": [100.0],
+            "Total Liabilities Net Minority Interest": [
+                60.0
+            ],  # total-equity fallback unused
+            "Total Equity Gross Minority Interest": [40.0],
+            "Ordinary Shares Number": [10.0],  # share fallbacks unused
+            "Share Issued": [12.0],
+            "Treasury Shares Number": [2.0],
+            "Goodwill": [5.0],
+        },
+        [END],
+    )
+    ns = normalize_statement(df, "balance_sheet", "annual")
+    assert ns.unmapped_labels == ["Goodwill"]
+    assert ns.notes == []
