@@ -246,9 +246,10 @@ Deviations from the addendum:
   the tool output.
 - **Eval v1 results predate A1.** Q4 and Q5 define their moving averages "using daily
   closes from" the range start, the pre-A1 convention, and their ground truth follows
-  that wording. Under the new default the server reports earlier crosses: GOOGL's first
-  2023 buy becomes 2023-02-01 (Q4's expected answer is GOOGL:2023-03-27). Q6's RSI is
-  unchanged at 57.95. The recorded results are kept as measured.
+  that wording. Rechecked against the post-A1 server: Q4 changes, because GOOGL's first
+  2023 buy becomes 2023-02-01 (Q4's expected answer is GOOGL:2023-03-27). Q5 does not:
+  AMZN and META still have the same 8 crosses, since the 30-day MA was ready before the
+  first one. Q6's RSI is unchanged at 57.95. The recorded results are kept as measured.
 
 ## Addendum A2: negative equity
 
