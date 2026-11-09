@@ -283,18 +283,41 @@ class FundamentalsTable:
         return out
 
 
+def _newest(
+    periods: list[tuple[str, Fields]],
+    has_inputs: Callable[[Fields], bool],
+    reported: Callable[[str], bool],
+) -> tuple[int | None, bool]:
+    """(index, fully reported) of the newest period with the inputs, preferring periods
+    whose statement is fully reported; falls back to any period with the inputs."""
+    candidates = [i for i, (_, f) in enumerate(periods) if has_inputs(f)]
+    full = [i for i in candidates if reported(periods[i][0])]
+    if full:
+        return full[0], True
+    return (candidates[0], False) if candidates else (None, False)
+
+
 def pe_eps(
-    periods: list[tuple[str, Fields]], period: str
+    periods: list[tuple[str, Fields]],
+    period: str,
+    reported: Callable[[str], bool] = lambda end: True,
 ) -> tuple[int | None, float | None, str | None]:
-    """(period index, EPS, note) for P/E: the newest annual diluted EPS, or TTM EPS
-    from 4 consecutive quarters ending at the newest quarter that reports EPS."""
-    eps = [f.get("diluted_eps") for _, f in periods]
-    first = next((i for i, e in enumerate(eps) if e is not None), None)
+    """(period index, EPS, note) for P/E: the newest annual diluted EPS, or TTM EPS from
+    4 consecutive quarters ending there. Prefers periods whose income statement is
+    fully reported (revenue and net income present), so an EPS figure Yahoo shows
+    before the rest of the year is filed is not used."""
+    first, full = _newest(periods, lambda f: f.get("diluted_eps") is not None, reported)
     if first is None:
         return None, None, None
+    caveat = (
+        None
+        if full
+        else f"pe_ratio uses {periods[first][0]}, whose income statement is only partly "
+        "reported; no fully reported period has diluted EPS."
+    )
     if period == "annual":
-        return first, eps[first], None
-    window = eps[first : first + 4]
+        return first, periods[first][1]["diluted_eps"], caveat
+    window = [f.get("diluted_eps") for _, f in periods[first : first + 4]]
     if len(window) < 4 or any(e is None for e in window):
         return (
             first,
@@ -304,26 +327,24 @@ def pe_eps(
                 "TTM EPS."
             ),
         )
-    return (
-        first,
-        sum(window),
-        (
-            f"pe_ratio uses trailing-twelve-month EPS (4 quarters ending {periods[first][0]})."
-        ),
-    )
+    ttm = f"pe_ratio uses trailing-twelve-month EPS (4 quarters ending {periods[first][0]})."
+    return first, sum(window), " ".join(n for n in (ttm, caveat) if n)
 
 
 def compute_fundamentals(
     periods: list[tuple[str, Fields]],
     metrics: list[str],
     market: MarketInputs | None,
+    fully_reported: Mapping[str, set[str]] | None = None,
 ) -> FundamentalsTable:
     """Evaluate `metrics` for every period.
 
     Each market metric fills one period: pe_ratio the newest period with diluted EPS,
     pb_ratio the newest with equity and a share count, dividend_yield the newest
-    period. A partially reported newest period (e.g. EPS released before the balance
-    sheet) therefore does not blank out P/B.
+    period. Periods whose statement is only partly reported are skipped (an early EPS
+    figure, a balance sheet without total assets) unless nothing else has the inputs.
+    `fully_reported` maps period end -> statements that fully reported it; None
+    treats every period as fully reported.
     """
     note_periods: dict[str, list[str]] = {}
     rows: list[tuple[str, dict[str, float | None]]] = []
@@ -334,36 +355,49 @@ def compute_fundamentals(
         if period_end not in ends:
             ends.append(period_end)
 
+    def reported(statement: str) -> Callable[[str], bool]:
+        if fully_reported is None:
+            return lambda end: True
+        return lambda end: statement in fully_reported.get(end, set())
+
     targets: dict[str, int] = {}
     eps_value, eps_note = None, None
     if market is not None and periods:
-        pe_index, eps_value, eps_note = pe_eps(periods, market.period)
-        pb_index = next(
-            (
-                i
-                for i, (_, f) in enumerate(periods)
-                if f.get("stockholders_equity") is not None
+        pe_index, eps_value, eps_note = pe_eps(
+            periods, market.period, reported("income_statement")
+        )
+        pb_index, pb_full = _newest(
+            periods,
+            lambda f: (
+                f.get("stockholders_equity") is not None
                 and f.get("shares_outstanding") is not None
             ),
-            None,
+            reported("balance_sheet"),
         )
         targets = {
             "pe_ratio": pe_index if pe_index is not None else 0,
             "pb_ratio": pb_index if pb_index is not None else 0,
             "dividend_yield": 0,
         }
-        if pe_index and "pe_ratio" in metrics:
+        if pe_index and "pe_ratio" in metrics and eps_note is None:
             note(
-                f"pe_ratio uses {periods[pe_index][0]}, the newest period that reports "
-                "diluted EPS.",
+                f"pe_ratio uses {periods[pe_index][0]}, the newest fully reported "
+                "period with diluted EPS.",
                 periods[pe_index][0],
             )
-        if pb_index and "pb_ratio" in metrics:
-            note(
-                f"pb_ratio uses {periods[pb_index][0]}, the newest period with "
-                "stockholders' equity and shares outstanding.",
-                periods[pb_index][0],
-            )
+        if pb_index is not None and "pb_ratio" in metrics:
+            if not pb_full:
+                note(
+                    f"pb_ratio uses {periods[pb_index][0]}, whose balance sheet is only "
+                    "partly reported; no fully reported period has equity and shares.",
+                    periods[pb_index][0],
+                )
+            elif pb_index:
+                note(
+                    f"pb_ratio uses {periods[pb_index][0]}, the newest fully reported "
+                    "period with stockholders' equity and shares outstanding.",
+                    periods[pb_index][0],
+                )
 
     for i, (period_end, f) in enumerate(periods):
         values: dict[str, float | None] = {}

@@ -224,7 +224,10 @@ def test_partial_newest_period_does_not_blank_pb():
         "pb_ratio": "2025",
         "dividend_yield": "2026",
     }
-    assert any(n.startswith("pb_ratio uses 2025, the newest period") for n in t.notes)
+    assert any(
+        n.startswith("pb_ratio uses 2025, the newest fully reported period")
+        for n in t.notes
+    )
 
 
 def test_notes_for_filters_to_kept_periods():
@@ -236,3 +239,47 @@ def test_notes_for_filters_to_kept_periods():
     )  # no suffix: one period kept
     assert t.notes_for(set()) == []
     assert any(n.endswith("(periods: 2026)") for n in t.notes)
+
+
+# ---- follow-up: partly reported periods (core fields missing) are skipped
+
+
+def test_pe_skips_period_whose_income_statement_is_partly_reported():
+    # Like SBUX FY2026: diluted EPS present, revenue and net income not yet.
+    periods = [
+        ("2026", {"diluted_eps": 2.21}),
+        ("2025", {"diluted_eps": 1.63, "revenue": 37.0, "net_income": 1.86}),
+    ]
+    reported = {"2026": set(), "2025": {"income_statement"}}
+    t = r.compute_fundamentals(periods, ["pe_ratio"], _market(price=109.57), reported)
+    assert t.periods[0][1]["pe_ratio"] is None
+    assert t.periods[1][1]["pe_ratio"] == pytest.approx(109.57 / 1.63, abs=1e-4)
+    assert t.applies_to == {"pe_ratio": "2025"}
+    assert (
+        "pe_ratio uses 2025, the newest fully reported period with diluted EPS."
+        in t.notes
+    )
+
+
+def test_pe_falls_back_to_partial_period_with_a_caveat():
+    periods = [("2026", {"diluted_eps": 2.0})]
+    t = r.compute_fundamentals(periods, ["pe_ratio"], _market(), {"2026": set()})
+    assert t.periods[0][1]["pe_ratio"] == 20.0
+    assert any("only partly reported" in n for n in t.notes)
+
+
+def test_pb_skips_partly_reported_balance_sheet():
+    periods = [
+        ("2026", {"stockholders_equity": 3000.0, "shares_outstanding": 100.0}),
+        (
+            "2025",
+            {
+                "stockholders_equity": 2000.0,
+                "shares_outstanding": 100.0,
+                "total_assets": 9.0,
+            },
+        ),
+    ]
+    reported = {"2026": set(), "2025": {"balance_sheet"}}
+    t = r.compute_fundamentals(periods, ["pb_ratio"], _market(), reported)
+    assert t.applies_to == {"pb_ratio": "2025"} and t.periods[1][1]["pb_ratio"] == 2.0

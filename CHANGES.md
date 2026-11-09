@@ -352,6 +352,25 @@ Deviations and additions:
   crossovers, so that date is now left out (a note explains the entry). A real
   crossover on the last warm-up bar is still listed in both modes.
 
+- **Partly reported columns count as partial.** A statement counts as having reported a
+  period only if its core fields are present: revenue and net income (income
+  statement), total assets and stockholders' equity (balance sheet), operating cash
+  flow (cash flow). Yahoo can show a column early with a few values: SBUX's FY2026
+  income column had only diluted EPS (2.21) and the share count, with no revenue or
+  net income to check it against, and P/E used it (49.6) with no warning.
+  - P/E and P/B skip partly reported periods and use the newest fully reported one,
+    with a note; if none is fully reported they fall back to the newest period with
+    the inputs and say so. SBUX P/E is now 67.3 from FY2025 EPS (1.63). Across 12
+    tickers this moved P/E off a partial column only for SBUX (annual and quarterly)
+    and MCD (quarterly); no other value changed.
+  - The partial-period note names what is present: `"2026-09-30: the income statement
+    partly reported so far (diluted_eps, diluted_shares only); metrics needing the
+    missing data are null."` This also fixes the SBUX ROE error, which said the income
+    statement was reported for 2026 and then that net income was not.
+  - `tearsheet_get_financial_statement` notes partly reported columns, e.g. `"2026-09-30:
+    partly reported (diluted_eps, diluted_shares only); revenue and net_income
+    missing."`
+
 ## Regression coverage
 
 Each problem from the refactor spec has a test that fails on the original code. The

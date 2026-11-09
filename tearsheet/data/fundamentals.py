@@ -95,6 +95,17 @@ class NormalizedStatement:
     unmapped_labels: list[str]
     missing_fields: list[str]
     notes: list[str] = field(default_factory=list)
+    # period end -> fields present, for periods lacking this statement's core fields
+    partial_periods: dict[str, list[str]] = field(default_factory=dict)
+
+
+# A statement counts as having reported a period only if these are present. Yahoo can
+# show a column early with a few values (e.g. diluted EPS from an earnings release).
+CORE_FIELDS = {
+    "income_statement": ("revenue", "net_income"),
+    "balance_sheet": ("total_assets", "stockholders_equity"),
+    "cash_flow": ("operating_cash_flow",),
+}
 
 
 def _value(df: pd.DataFrame, label: str, col) -> float | None:
@@ -192,6 +203,11 @@ def normalize_statement(
             periods.append(FiscalPeriodFields(end, values))
 
     missing = [name for name in mapping if all(p.fields[name] is None for p in periods)]
+    partial = {
+        p.period_end: [k for k, v in p.fields.items() if v is not None]
+        for p in periods
+        if any(p.fields[c] is None for c in CORE_FIELDS[statement])
+    }
     return NormalizedStatement(
         statement=statement,
         period=period,
@@ -199,6 +215,7 @@ def normalize_statement(
         unmapped_labels=sorted(set(labels) - used),
         missing_fields=missing,
         notes=notes,
+        partial_periods=partial,
     )
 
 
@@ -242,32 +259,60 @@ STATEMENT_NAMES = {
 @dataclass
 class MergedFields:
     periods: list[tuple[str, dict[str, float | None]]]  # newest first
-    sources: dict[str, list[str]]  # period end -> statements that reported it
+    sources: dict[str, list[str]]  # period end -> statements that have the column
     statements: list[str]  # statements requested
     notes: list[str]  # statement-level notes (derived fields)
+    # (period end, statement) -> fields present, where the core fields are missing
+    partly: dict[tuple[str, str], list[str]] = field(default_factory=dict)
+
+    def complete(self, end: str) -> set[str]:
+        """Statements that fully reported `end` (column present with core fields)."""
+        return {s for s in self.sources.get(end, []) if (end, s) not in self.partly}
 
     def partial_notes(self) -> dict[str, str]:
-        """Period end -> note, for periods missing from any requested statement.
+        """Period end -> note, for periods any requested statement did not fully report.
 
         Periods newer than the newest complete one are "reported so far" (filing in
         progress); older ones have aged out of a statement's Yahoo window.
         """
         complete = [
-            e for e, _ in self.periods if len(self.sources[e]) == len(self.statements)
+            e for e, _ in self.periods if len(self.complete(e)) == len(self.statements)
         ]
         newest_complete = complete[0] if complete else None
         out = {}
         for end, _ in self.periods:
-            present = self.sources[end]
-            if len(present) == len(self.statements):
+            full = [s for s in self.statements if s in self.complete(end)]
+            if len(full) == len(self.statements):
                 continue
-            names = " and ".join(STATEMENT_NAMES[s] for s in present)
-            if newest_complete is None or end > newest_complete:
-                where = "reported so far"
-            else:
-                where = "available from Yahoo for this period"
+            newer = newest_complete is None or end > newest_complete
+            partly = [s for s in self.statements if (end, s) in self.partly]
+            if not partly:
+                names = " and ".join(STATEMENT_NAMES[s] for s in full)
+                where = (
+                    "reported so far"
+                    if newer
+                    else "available from Yahoo for this period"
+                )
+                out[end] = (
+                    f"{end}: only {names} {where}; metrics needing other statements "
+                    "are null."
+                )
+                continue
+            so_far = " so far" if newer else ""
+            pieces = [
+                f"{STATEMENT_NAMES[s]} partly reported{so_far} "
+                f"({', '.join(self.partly[(end, s)])} only)"
+                for s in partly
+            ]
+            if full:
+                names = " and ".join(STATEMENT_NAMES[s] for s in full)
+                pieces.insert(0, f"{names} reported")
+            absent = [s for s in self.statements if s not in self.sources.get(end, [])]
+            if absent:
+                names = " and ".join(STATEMENT_NAMES[s] for s in absent)
+                pieces.append(f"{names} not reported{so_far}")
             out[end] = (
-                f"{end}: only {names} {where}; metrics needing other statements are null."
+                f"{end}: {'; '.join(pieces)}; metrics needing the missing data are null."
             )
         return out
 
@@ -285,14 +330,17 @@ async def get_merged_fields(
     )
     merged: dict[str, dict[str, float | None]] = {}
     sources: dict[str, list[str]] = {}
+    partly: dict[tuple[str, str], list[str]] = {}
     notes: list[str] = []
     for ns in normalized:
         notes.extend(ns.notes)
         for p in ns.periods:
             merged.setdefault(p.period_end, {}).update(p.fields)
             sources.setdefault(p.period_end, []).append(ns.statement)
+        for end, present in ns.partial_periods.items():
+            partly[(end, ns.statement)] = present
     ordered = sorted(merged.items(), key=lambda kv: kv[0], reverse=True)
-    return MergedFields(ordered, sources, list(statements), notes)
+    return MergedFields(ordered, sources, list(statements), notes, partly)
 
 
 async def get_financial_currency(ticker: str) -> str | None:

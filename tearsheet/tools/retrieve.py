@@ -3,6 +3,7 @@ from functools import partial
 
 from server import READ_ONLY_REMOTE, mcp
 from tearsheet.data import fundamentals, market
+from tearsheet.data.fundamentals import CORE_FIELDS
 from tearsheet.models import (
     INTRADAY_INTERVALS,
     Adjusted,
@@ -201,5 +202,12 @@ async def get_financial_statement(
         ],
         missing_fields=ns.missing_fields,
         unmapped_labels=ns.unmapped_labels,
-        notes=ns.notes,
+        notes=[
+            *ns.notes,
+            *(
+                f"{end}: partly reported ({', '.join(present)} only); "
+                f"{' and '.join(CORE_FIELDS[statement])} missing."
+                for end, present in ns.partial_periods.items()
+            ),
+        ],
     )

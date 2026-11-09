@@ -123,6 +123,70 @@ async def test_market_ratios_use_newest_period_with_their_inputs(part):
     }
     assert out["as_of_price"]["applies_to_period_end"] == "2026-12-31"
     assert any(
-        "pe_ratio uses 2025-12-31, the newest period that reports diluted EPS" in n
+        "pe_ratio uses 2025-12-31, the newest fully reported period with diluted EPS"
+        in n
         for n in out["notes"]
+    )
+
+
+@pytest.fixture
+def early_eps(fake_yahoo):
+    """SBUX-like: the newest income column has only EPS and share count."""
+    income = {
+        "Total Revenue": [float("nan"), 37_000.0, 36_000.0],
+        "Net Income": [float("nan"), 1_856.0, 3_761.0],
+        "Diluted EPS": [2.21, 1.63, 3.31],
+        "Diluted Average Shares": [1_143.0, 1_139.0, 1_136.0],
+    }
+    return fake_yahoo.add(
+        "EARLY",
+        fast_info={"lastPrice": 109.57, "currency": "USD"},
+        info={"longName": "Early Co", "financialCurrency": "USD"},
+        statements={
+            "financials": make_statement(
+                income, ["2026-09-30", "2025-09-30", "2024-09-30"]
+            )
+        },
+    )
+
+
+@pytest.mark.anyio
+async def test_pe_ignores_early_eps_column(early_eps):
+    out = await call(
+        "tearsheet_get_fundamentals",
+        {"ticker": "EARLY", "metrics": ["pe_ratio", "net_margin"]},
+    )
+    by_end = {p["period_end"]: p["metrics"] for p in out["periods"]}
+    assert by_end["2025-09-30"]["pe_ratio"] == pytest.approx(109.57 / 1.63, abs=1e-4)
+    assert out["as_of_price"]["applies_to"]["pe_ratio"] == "2025-09-30"
+    # With P/E moved to FY2025, FY2026 has no values: dropped, and so are its notes.
+    assert "2026-09-30" not in by_end
+    assert not any("2026-09-30" in n for n in out["notes"])
+
+
+@pytest.mark.anyio
+async def test_kept_early_eps_column_is_explained_consistently(early_eps):
+    # dividend_yield stays on the newest period, so FY2026 is kept and explained.
+    out = await call(
+        "tearsheet_get_fundamentals",
+        {"ticker": "EARLY", "metrics": ["pe_ratio", "net_margin", "dividend_yield"]},
+    )
+    assert out["periods"][0]["period_end"] == "2026-09-30"
+    assert (
+        "2026-09-30: the income statement partly reported so far (diluted_eps, "
+        "diluted_shares only); metrics needing the missing data are null."
+        in out["notes"]
+    )
+    assert not any("only the income statement reported" in n for n in out["notes"])
+
+
+@pytest.mark.anyio
+async def test_statement_tool_flags_partly_reported_column(early_eps):
+    out = await call(
+        "tearsheet_get_financial_statement",
+        {"ticker": "EARLY", "statement": "income_statement"},
+    )
+    assert (
+        "2026-09-30: partly reported (diluted_eps, diluted_shares only); revenue and "
+        "net_income missing." in out["notes"]
     )

@@ -47,6 +47,7 @@ async def load_fundamentals(
         key=list(LABELS).index,
     )
     periods, currency, statement_notes, partial_notes = [], None, [], {}
+    fully_reported = None
     if statements:
         merged, currency = await market.gather(
             partial(fundamentals.get_merged_fields, ticker, period, statements),
@@ -54,6 +55,7 @@ async def load_fundamentals(
         )
         periods, statement_notes = merged.periods, merged.notes
         partial_notes = merged.partial_notes()
+        fully_reported = {end: merged.complete(end) for end, _ in periods}
 
     inputs, quote = None, None
     if any(m in MARKET_METRICS for m in metrics):
@@ -76,7 +78,7 @@ async def load_fundamentals(
         if not periods:
             periods = [(date.today().isoformat(), {})]
 
-    table = compute_fundamentals(periods, metrics, inputs)
+    table = compute_fundamentals(periods, metrics, inputs, fully_reported)
     as_of = None
     if quote is not None:
         applies_to = {m: table.applies_to[m] for m in metrics if m in table.applies_to}
