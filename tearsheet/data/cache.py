@@ -5,12 +5,14 @@ A per-key lock makes concurrent requests for the same key share one upstream fet
 Values are copied on the way in and out, so callers can never mutate a cached frame.
 
 The cache cleans up after itself: every `set` drops expired entries and locks that
-no live entry or in-flight load needs, and at most `max_entries` entries are kept
-(the ones closest to expiry are evicted first).
+no live entry or in-flight load needs, and at most `max_entries` entries are kept.
+Eviction is least-recently-used, so a fresh short-lived entry (15-minute intraday)
+is not thrown out just because it expires sooner than the daily entries around it.
 """
 
 import copy
 import time
+from collections import OrderedDict
 from collections.abc import Awaitable, Callable, Hashable
 from typing import Any
 
@@ -39,7 +41,8 @@ class TTLCache:
             raise ValueError("max_entries must be at least 1")
         self._clock = clock
         self._max_entries = max_entries
-        self._entries: dict[Hashable, tuple[float, Any]] = {}
+        # Least recently used first.
+        self._entries: OrderedDict[Hashable, tuple[float, Any]] = OrderedDict()
         self._locks: dict[Hashable, anyio.Lock] = {}
 
     def __len__(self) -> int:
@@ -53,6 +56,7 @@ class TTLCache:
         if self._clock() >= expires_at:
             del self._entries[key]
             return None
+        self._entries.move_to_end(key)
         return _copy(value)
 
     def set(self, key: Hashable, value: Any, ttl: float) -> None:
@@ -62,11 +66,9 @@ class TTLCache:
         ]:
             del self._entries[k]
         self._entries[key] = (now + ttl, _copy(value))
-        excess = len(self._entries) - self._max_entries
-        if excess > 0:
-            soonest = sorted(self._entries, key=lambda k: self._entries[k][0])[:excess]
-            for k in soonest:
-                del self._entries[k]
+        self._entries.move_to_end(key)
+        while len(self._entries) > self._max_entries:
+            self._entries.popitem(last=False)  # least recently used
         self._prune_locks()
 
     def _prune_locks(self) -> None:

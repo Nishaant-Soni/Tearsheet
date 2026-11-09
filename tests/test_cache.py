@@ -143,20 +143,40 @@ async def test_concurrent_loads_still_share_one_fetch():
     assert set(cache._locks) <= set(cache._entries)
 
 
-def test_max_entries_evicts_closest_to_expiry():
+def test_max_entries_evicts_least_recently_used():
     clock = FakeClock()
     cache = TTLCache(clock=clock)
     total = 256 + 10
     for i in range(total):
-        cache.set(f"k{i}", i, ttl=1000 + i)  # k0 expires first, k265 last
+        cache.set(f"k{i}", i, ttl=1000)
     assert len(cache) == 256
     assert set(cache._entries) == {f"k{i}" for i in range(10, total)}
+
+
+def test_recent_reads_protect_entries_from_eviction():
+    cache = TTLCache(max_entries=3)
+    for k in ("a", "b", "c"):
+        cache.set(k, k, ttl=100)
+    assert cache.get("a") == "a"  # a is now most recently used
+    cache.set("d", "d", ttl=100)
+    assert set(cache._entries) == {"a", "c", "d"}  # b was least recently used
+
+
+def test_short_lived_entry_survives_a_full_cache_of_long_ones():
+    # The addendum's closest-to-expiry rule evicted a new 15-minute intraday entry
+    # immediately when the cache was full of 4-hour daily entries.
+    cache = TTLCache(max_entries=256)
+    for i in range(256):
+        cache.set(("daily", i), i, ttl=4 * 3600)
+    cache.set(("intraday", 0), "fresh", ttl=15 * 60)
+    assert cache.get(("intraday", 0)) == "fresh"
+    assert ("daily", 0) not in cache._entries
 
 
 def test_max_entries_is_configurable_and_validated():
     cache = TTLCache(max_entries=3)
     for i in range(5):
-        cache.set(i, i, ttl=10 + i)
+        cache.set(i, i, ttl=10)
     assert set(cache._entries) == {2, 3, 4}
     with pytest.raises(ValueError):
         TTLCache(max_entries=0)

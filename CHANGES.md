@@ -306,8 +306,10 @@ per-key locks were never removed, so a long-running server grew without bound.
 - Every `set` drops expired entries and locks that no live entry or in-flight load
   needs (anyio hands a released lock straight to the next waiter, so "unlocked with
   nobody waiting" is safe to forget). A failed load removes its own lock.
-- `max_entries` (default 256) caps each cache; the entries closest to expiry are
-  evicted first.
+- `max_entries` (default 256) caps each cache. Eviction is least-recently-used. The
+  addendum asked for the entries closest to expiry, but with a cache full of 4-hour
+  daily entries that evicts every new 15-minute intraday entry as soon as it is
+  inserted, so intraday data would never stay cached (changed after review).
 - Concurrent requests for the same key still share one upstream fetch.
 
 ## Addendum A5: partially reported periods
