@@ -44,7 +44,7 @@ Plot tools return the image, a short text summary (file path, date range, last c
 
 ### Conventions
 - Ratios, margins, returns and growth rates are **fractions**: `0.25` means 25%.
-- Price-based ratios each use the **newest period that has their inputs**: P/E the newest diluted EPS, P/B the newest balance sheet, dividend yield the newest period. `as_of_price.applies_to` says which.
+- Price-based ratios each use the **newest fully reported period that has their inputs**: P/E the newest diluted EPS, P/B the newest balance sheet, dividend yield the newest period. `as_of_price.applies_to` says which.
 - A fiscal period that statements have **only partly reported** so far (for example, a column with diluted EPS but no revenue or net income yet) gets a note saying what is there, and price-based ratios skip it in favour of the newest fully reported period. Fundamental charts leave periods with no value off either end of the series and say why; gaps in the middle show as "n/a" bars.
 - `roe`, `debt_to_equity`, `liabilities_to_equity` and `pb_ratio` are **null when stockholders' equity is zero or negative** (common after large buybacks, e.g. SBUX, MCD, BKNG), with one note per metric giving the equity range. `book_value_per_share` stays negative, and ROA and the margins are unaffected.
 - Dates are `YYYY-MM-DD`. `end_date` is **inclusive** and defaults to today.
@@ -60,6 +60,7 @@ Plot tools return the image, a short text summary (file path, date range, last c
 - detects a crossover at the **close** of bar t (short SMA above the long SMA after being at or below it the day before; the reverse for a sell),
 - **fills at the open of bar t+1**, never at the signal bar's close. A signal on the last bar is not filled. A signal on the last warm-up bar fills at the first in-range open and keeps its earlier `signal_date`,
 - with `entry_mode="crossover"` (default) enters only on a fresh buy signal; with `entry_mode="state"` is long whenever the short SMA is above the long SMA, including from the first in-range bar,
+- lists only crossovers in `buy_signal_dates` and `sell_signal_dates`. A state-mode entry at the start of the range is not a crossover, so it appears in `trades` but not in `buy_signal_dates`,
 - is long-only, fully invested or flat,
 - charges `cost_bps` (default 5) on every entry and exit, with no other slippage model,
 - marks the position to market every day, so max drawdown includes dips during open trades,
