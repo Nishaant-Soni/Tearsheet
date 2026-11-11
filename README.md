@@ -168,3 +168,6 @@ evals/, evaluation.xml      before/after evaluation of the tool surface
 ```
 
 See [CHANGES.md](CHANGES.md) for the mapping from the old tool names, behavior changes and fixed calculation bugs, and [evals/EVAL_RESULTS.md](evals/EVAL_RESULTS.md) for the evaluation results.
+
+## License
+[MIT](LICENSE)

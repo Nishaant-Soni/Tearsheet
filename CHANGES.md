@@ -1,5 +1,8 @@
 # Changes
 
+Released as **v1.0.0** (MIT licensed). Install a pinned release with
+`uvx --from git+https://github.com/Nishaant-Soni/Tearsheet@v1.0.0 tearsheet`.
+
 Tracks the refactor described in the refactor spec: tool renames, behavior changes,
 deviations from the spec, regression coverage and the evaluation result.
 
