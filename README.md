@@ -70,7 +70,25 @@ Plot tools return the image, a short text summary (file path, date range, last c
 
 `tearsheet_plot_ma_crossover` uses the same warm-up and signal computation, so for the same inputs it lists the same signal dates as the backtest.
 
-## Installation
+## Quick start (no clone)
+Requires [uv](https://github.com/astral-sh/uv). uv fetches Python 3.12+ and the dependencies itself.
+
+In Claude Desktop, go to Settings → Developer → Edit Config and add:
+```json
+{
+  "mcpServers": {
+    "tearsheet": {
+      "command": "uvx",
+      "args": ["--from", "git+https://github.com/Nishaant-Soni/Tearsheet", "tearsheet"]
+    }
+  }
+}
+```
+Restart Claude Desktop and the `tearsheet_*` tools appear. Charts are saved to `~/.tearsheet/charts` (see [Configuration](#configuration)). To pick up a newer version later, run `uv cache clean tearsheet` and restart.
+
+Each user runs the server on their own machine, so Yahoo Finance requests come from their own connection.
+
+## Installation (from source)
 1. **Clone the repository**
    ```bash
    git clone https://github.com/Nishaant-Soni/Tearsheet.git
@@ -124,7 +142,7 @@ Plot tools return the image, a short text summary (file path, date range, last c
 ## Configuration
 | Environment variable | Default | Effect |
 |---|---|---|
-| `TEARSHEET_DATA_DIR` | the repo's `data/` folder | Where chart PNGs are saved |
+| `TEARSHEET_DATA_DIR` | the repo's `data/` folder in a source checkout, `~/.tearsheet/charts` when installed with `uvx` | Where chart PNGs are saved |
 | `TEARSHEET_OPEN_CHARTS` | unset (off) | Set to `1` to open each new chart in the system image viewer |
 
 In Claude Desktop, set these with an `"env": {...}` block next to `"command"` in the server entry.
@@ -139,7 +157,8 @@ uv run ruff format .       # format
 
 Project layout:
 ```
-main.py, server.py          entry point and the shared MCP server
+main.py                     runs the server from a checkout (`uv run main.py`)
+tearsheet/__main__.py       the `tearsheet` command; tearsheet/server.py holds the shared MCP server
 tearsheet/data/             the only code that calls yfinance (async, cached)
 tearsheet/analysis/         pure functions: indicators, growth, backtest, ratios
 tearsheet/viz/              chart rendering (PNG bytes) and chart file storage

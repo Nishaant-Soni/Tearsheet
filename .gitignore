@@ -6,3 +6,4 @@ node_modules/
 .deepeval/
 .DS_Store
 data/*.png
+dist/

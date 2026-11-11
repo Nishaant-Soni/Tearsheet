@@ -390,6 +390,20 @@ Deviations and additions:
   only partly reported so far, and none of the requested metrics has a value yet."`
   Older columns that have aged out of Yahoo's window still drop off silently.
 
+## Packaging
+
+- **Installable with `uvx`.** The project builds as a package (hatchling) with a
+  `tearsheet` command, so users can run it without cloning:
+  `uvx --from git+https://github.com/Nishaant-Soni/Tearsheet tearsheet`. `server.py`
+  moved to `tearsheet/server.py` and the entry point is `tearsheet/__main__.py`
+  (`python -m tearsheet` works too). The root `main.py` remains, so `uv run main.py`
+  and existing Claude Desktop configs keep working.
+- **Installed default chart folder is `~/.tearsheet/charts`.** In a source checkout it
+  is still the repo's `data/` folder. `TEARSHEET_DATA_DIR` overrides both.
+- **`six` is a declared dependency.** `mplfinance` imports it without declaring it; the
+  development environment happened to have it, but a clean `uvx` install crashed on
+  startup. CI now installs the built wheel in a clean environment to catch this.
+
 ## Regression coverage
 
 Each problem from the refactor spec has a test that fails on the original code. The

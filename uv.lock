@@ -1336,12 +1336,13 @@ wheels = [
 [[package]]
 name = "tearsheet"
 version = "0.1.0"
-source = { virtual = "." }
+source = { editable = "." }
 dependencies = [
     { name = "matplotlib" },
     { name = "mcp" },
     { name = "mplfinance" },
     { name = "pandas" },
+    { name = "six" },
     { name = "yfinance" },
 ]
 
@@ -1357,6 +1358,7 @@ requires-dist = [
     { name = "mcp", specifier = ">=2.3.0" },
     { name = "mplfinance", specifier = ">=0.12.10b0" },
     { name = "pandas", specifier = ">=2.3.0" },
+    { name = "six", specifier = ">=1.16" },
     { name = "yfinance", specifier = ">=1.8.0" },
 ]
 

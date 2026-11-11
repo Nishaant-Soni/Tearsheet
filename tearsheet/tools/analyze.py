@@ -3,7 +3,6 @@ from typing import Annotated
 from mcp.server.mcpserver.exceptions import ToolError
 from pydantic import Field
 
-from server import PURE_COMPUTE, READ_ONLY_REMOTE, mcp
 from tearsheet.analysis import backtest, growth, indicators
 from tearsheet.analysis.ratios import (
     ALL_METRICS,
@@ -41,6 +40,7 @@ from tearsheet.models import (
     resolve_range,
 )
 from tearsheet.serialize import RATIO_DP, frame_rows, num, series_summary
+from tearsheet.server import PURE_COMPUTE, READ_ONLY_REMOTE, mcp
 from tearsheet.tools.common import load_fundamentals
 
 

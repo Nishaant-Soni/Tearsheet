@@ -1,7 +1,6 @@
 from datetime import date
 from functools import partial
 
-from server import READ_ONLY_REMOTE, mcp
 from tearsheet.data import fundamentals, market
 from tearsheet.data.fundamentals import CORE_FIELDS
 from tearsheet.models import (
@@ -28,6 +27,7 @@ from tearsheet.models import (
     resolve_range,
 )
 from tearsheet.serialize import num, summarize, to_rows
+from tearsheet.server import READ_ONLY_REMOTE, mcp
 
 
 @mcp.tool(name="tearsheet_get_quote", annotations=READ_ONLY_REMOTE)

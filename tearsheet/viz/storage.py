@@ -11,12 +11,21 @@ import subprocess
 from datetime import datetime
 from pathlib import Path
 
-DEFAULT_DATA_DIR = Path(__file__).resolve().parents[2] / "data"
+
+def default_data_dir(package_root: Path) -> Path:
+    """The repo's data/ folder in a source checkout; ~/.tearsheet/charts when
+    installed as a package (e.g. via uvx), where the package sits in uv's cache."""
+    if (package_root / "pyproject.toml").exists():
+        return package_root / "data"
+    return Path.home() / ".tearsheet" / "charts"
+
+
+DEFAULT_DATA_DIR = default_data_dir(Path(__file__).resolve().parents[2])
 MAX_TICKER_PART = 60
 
 
 def data_dir() -> Path:
-    """TEARSHEET_DATA_DIR if set, else the repo's data/ folder. Read on every call."""
+    """TEARSHEET_DATA_DIR if set, else DEFAULT_DATA_DIR. Read on every call."""
     return (
         Path(os.environ.get("TEARSHEET_DATA_DIR") or DEFAULT_DATA_DIR)
         .expanduser()

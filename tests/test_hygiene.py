@@ -13,7 +13,7 @@ from tests.conftest import make_ohlcv
 
 ROOT = Path(__file__).resolve().parent.parent
 SOURCE_DIRS = [ROOT / "tearsheet", ROOT / "evals"]
-SOURCE_FILES = [ROOT / "main.py", ROOT / "server.py"]
+SOURCE_FILES = [ROOT / "main.py"]
 
 
 def source_files():

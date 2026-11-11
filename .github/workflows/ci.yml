@@ -37,3 +37,11 @@ jobs:
 
       - name: Test (pytest)
         run: uv run pytest
+
+      # Install the built wheel in a clean environment, outside the checkout, so an
+      # undeclared dependency (e.g. mplfinance needing six) fails here, not for users.
+      - name: Package smoke test
+        run: |
+          uv build --wheel -o dist
+          cd "$RUNNER_TEMP"
+          uvx --from "$GITHUB_WORKSPACE"/dist/*.whl python -c "import tearsheet.__main__; from tearsheet.server import mcp; print(mcp.name)"

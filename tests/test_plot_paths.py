@@ -64,7 +64,17 @@ def test_data_dir_env_and_default(monkeypatch, tmp_path):
     assert storage.data_dir() == (tmp_path / "x").resolve()
     monkeypatch.delenv("TEARSHEET_DATA_DIR")
     assert storage.data_dir() == storage.DEFAULT_DATA_DIR
-    assert storage.DEFAULT_DATA_DIR.name == "data"
+    assert storage.DEFAULT_DATA_DIR.name == "data"  # tests run from a checkout
+
+
+def test_default_data_dir_checkout_vs_installed(tmp_path):
+    checkout = tmp_path / "repo"
+    checkout.mkdir()
+    (checkout / "pyproject.toml").write_text("")
+    assert storage.default_data_dir(checkout) == checkout / "data"
+    installed = tmp_path / "site-packages"
+    installed.mkdir()
+    assert storage.default_data_dir(installed) == Path.home() / ".tearsheet" / "charts"
 
 
 def test_viewer_only_opens_when_enabled(monkeypatch, tmp_path):

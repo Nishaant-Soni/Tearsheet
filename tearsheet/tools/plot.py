@@ -8,7 +8,6 @@ from mcp.server.mcpserver import Image
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import CallToolResult, TextContent
 
-from server import PLOT_LOCAL_WRITE, mcp
 from tearsheet.analysis import backtest
 from tearsheet.analysis.ratios import CURRENCY_METRICS, METRIC_UNITS
 from tearsheet.data import market
@@ -31,6 +30,7 @@ from tearsheet.models import (
     resolve_range,
 )
 from tearsheet.serialize import RATIO_DP, fmt_date, num, summarize
+from tearsheet.server import PLOT_LOCAL_WRITE, mcp
 from tearsheet.tools.common import load_fundamentals
 from tearsheet.viz import charts, storage
 

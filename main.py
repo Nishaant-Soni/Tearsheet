@@ -1,8 +1,6 @@
-# Import tools so they get registered via decorators
-import tearsheet.tools.analyze  # noqa: F401
-import tearsheet.tools.plot  # noqa: F401
-import tearsheet.tools.retrieve  # noqa: F401
-from server import mcp
+"""Run the server from a source checkout: `uv run main.py`."""
+
+from tearsheet.__main__ import main, mcp  # noqa: F401
 
 if __name__ == "__main__":
-    mcp.run()
+    main()
